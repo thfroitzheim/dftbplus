@@ -1088,6 +1088,7 @@ contains
   #:if WITH_DFTD3
     type(TDispDftD3), allocatable :: dftd3
   #:endif
+    type(TSimpleDftD3), allocatable :: sdftd3
     type(TDispDftD4), allocatable :: dftd4
 
     ! H5 correction
@@ -2023,6 +2024,14 @@ contains
         end if
         call move_alloc(dftd3, dispersion)
     #:endif
+      else if (allocated(input%ctrl%dispInp%sdftd3)) then
+        allocate(sdftd3)
+        if (tPeriodic) then
+          call init(sdftd3, input%ctrl%dispInp%sdftd3, nAtom, species0, speciesName, LatVec)
+        else
+          call init(sdftd3, input%ctrl%dispInp%sdftd3, nAtom, species0, speciesName)
+        end if
+        call move_alloc(sdftd3, dispersion)
       else if (allocated(input%ctrl%dispInp%dftd4)) then
         allocate(dftd4)
         if (tPeriodic) then
@@ -2950,6 +2959,8 @@ contains
       type is (TDispDftD3)
         write(stdOut, "(A)") "Using DFT-D3 dispersion corrections"
     #:endif
+      type is (TSimpleDftD3)
+        write(stdOut, "(A)") "Using simple DFT-D3 dispersion corrections"
       type is (TDispDftD4)
         write(stdOut, "(A)") "Using DFT-D4 dispersion corrections"
       class default
