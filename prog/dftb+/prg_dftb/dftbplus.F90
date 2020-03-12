@@ -15,6 +15,7 @@ program dftbplus
   use dftbp_formatout, only : printDftbHeader
   use dftbp_hsdhelpers, only : parseHsdInput
   use dftbp_initprogram, only : initProgramVariables, destructProgramVariables
+  use dftbp_argparser, only : TArgParser, init
   implicit none
 
   character(len=*), parameter :: releaseName = '${RELEASE}$'
@@ -22,8 +23,10 @@ program dftbplus
 
   type(TEnvironment) :: env
   type(TInputData), allocatable :: input
+  type(TArgParser) :: argParser
 
   call initGlobalEnv()
+  call init(argParser)
   call printDftbHeader(releaseName, releaseYear)
   allocate(input)
   call parseHsdInput(input)
