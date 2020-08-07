@@ -14,17 +14,18 @@ module dftbp_borndata
   implicit none
   private
 
-  public :: getVanDerWaalsRadiusD3
+  public :: getVanDerWaalsRadBorn
 
 
   !> Get van-der-Waals radius for a species
-  interface getVanDerWaalsRadiusD3
-    module procedure :: getVanDerWaalsRadiusD3Symbol
-    module procedure :: getVanDerWaalsRadiusD3Number
-  end interface getVanDerWaalsRadiusD3
+  interface getVanDerWaalsRadBorn
+    module procedure :: getVanDerWaalsRadBornSymbol
+    module procedure :: getVanDerWaalsRadBornNumber
+  end interface getVanDerWaalsRadBorn
 
-  !> D3 pairwise van-der-Waals radii (only homoatomic pairs present here)
-  real(dp), parameter :: vanDerWaalsRadiiD3(1:94) = AA__Bohr * [&
+  !> D3 pairwise van-der-Waals radii (only homoatomic pairs present here),
+  !  slightly modified values
+  real(dp), parameter :: vanDerWaalsRadBorn(1:94) = AA__Bohr * [&
       & 1.09155_dp, 0.86735_dp, 1.74780_dp, 1.54910_dp, &
       & 1.60800_dp, 1.45515_dp, 1.31125_dp, 1.24085_dp, &
       & 1.14980_dp, 1.06870_dp, 1.85410_dp, 1.74195_dp, &
@@ -53,7 +54,7 @@ module dftbp_borndata
 contains
 
   !> Get van-der-Waals radius for species with a given symbol
-  elemental function getVanDerWaalsRadiusD3Symbol(symbol) result(radius)
+  elemental function getVanDerWaalsRadBornSymbol(symbol) result(radius)
 
     !> Element symbol
     character(len=*), intent(in) :: symbol
@@ -61,12 +62,12 @@ contains
     !> van-der-Waals radius
     real(dp) :: radius
 
-    radius = getVanDerWaalsRadiusD3(symbolToNumber(symbol))
+    radius = getVanDerWaalsRadBorn(symbolToNumber(symbol))
 
-  end function getVanDerWaalsRadiusD3Symbol
+  end function getVanDerWaalsRadBornSymbol
 
   !> Get van-der-Waals radius for species with a given atomic number
-  elemental function getVanDerWaalsRadiusD3Number(number) result(radius)
+  elemental function getVanDerWaalsRadBornNumber(number) result(radius)
 
     !> Atomic number
     integer, intent(in) :: number
@@ -74,12 +75,12 @@ contains
     !> van-der-Waals radius
     real(dp) :: radius
 
-    if (number > 0 .and. number <= size(vanDerWaalsRadiiD3, dim=1)) then
-      radius = vanDerWaalsRadiiD3(number)
+    if (number > 0 .and. number <= size(vanDerWaalsRadBorn, dim=1)) then
+      radius = vanDerWaalsRadBorn(number)
     else
       radius = -1.0_dp
     end if
 
-  end function getVanDerWaalsRadiusD3Number
+  end function getVanDerWaalsRadBornNumber
 
 end module dftbp_borndata

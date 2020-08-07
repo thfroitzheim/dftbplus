@@ -58,6 +58,9 @@ module dftbp_simpledftd3
   !> Input for the DFT-D3 model
   type, extends(TDftD3Param) :: TSimpleDftD3Input
 
+    !> Atomic numbers for each species
+    integer, allocatable :: izp(:)
+
     !> Cutoff radius for dispersion interactions.
     real(dp) :: cutoffInter = 64.0_dp
 
@@ -92,8 +95,8 @@ module dftbp_simpledftd3
     !> Volume of the unit cell
     real(dp) :: vol
 
-    !> stress tensor
-    real(dp) :: stress(3, 3)
+    !> sigma tensor
+    real(dp) :: sigma(3, 3)
 
     !> is this periodic
     logical :: tPeriodic
@@ -168,7 +171,7 @@ contains
     this%param = input%TDftD3Param
     this%cutoffInter = input%cutoffInter
 
-    call init(this%ref, speciesNames)
+    call init(this%ref, input%izp)
 
     if (this%tPeriodic) then
       call init(this%cnCont, input%cnInput, nAtom, latVecs)
@@ -222,18 +225,14 @@ contains
 
     this%energies(:) = 0.0_dp
     this%gradients(:, :) = 0.0_dp
-    this%stress(:, :) = 0.0_dp
+    this%sigma(:, :) = 0.0_dp
 
     call this%cnCont%updateCoords(neigh, img2CentCell, coords, species0)
 
     call getNrOfNeighboursForAll(nNeighbour, neigh, this%cutoffInter)
     call dispersionGradient(this%ref, this%param, nNeighbour, coords, species0, neigh, &
         & img2CentCell, this%cnCont%cn, this%cnCont%dcndr, this%cnCont%dcndL, &
-        & this%energies, this%gradients, this%stress)
-
-    if (this%tPeriodic) then
-      this%stress(:, :) = this%stress / this%vol
-    end if
+        & this%energies, this%gradients, this%sigma)
 
     this%tCoordsUpdated = .true.
 
@@ -313,7 +312,7 @@ contains
     @:ASSERT(this%tCoordsUpdated)
     @:ASSERT(all(shape(stress) == [3, 3]))
 
-    stress(:,:) = this%stress
+    stress(:,:) = this%sigma / this%vol
 
   end subroutine getStress
 
@@ -406,9 +405,9 @@ contains
   end subroutine weightReferences
 
 
-  !> Actual implementation of the dispersion energy, gradients and stress tensor.
+  !> Actual implementation of the dispersion energy, gradients and sigma tensor.
   subroutine dispersionGradient(calc, param, nNeighbour, coords, species, neigh, img2CentCell, &
-      & cn, dcndr, dcndL, energies, gradients, stress)
+      & cn, dcndr, dcndL, energies, gradients, sigma)
 
     !> DFT-D dispersion model.
     type(TDftD3Ref), intent(in) :: calc
@@ -446,13 +445,13 @@ contains
     !> Updated gradient vector at return
     real(dp), intent(inout) :: gradients(:, :)
 
-    !> Updated stress tensor at return
-    real(dp), intent(inout) :: stress(:, :)
+    !> Updated sigma tensor at return
+    real(dp), intent(inout) :: sigma(:, :)
 
     integer :: nRef, nAtom
     integer :: iAt1, iSp1, iNeigh, iAt2, iSp2, iAt2f
     real(dp) :: dc6, dc6dcn1, dc6dcn2
-    real(dp) :: vec(3), grad(3), dEr, dGr, sigma(3, 3)
+    real(dp) :: vec(3), grad(3), dEr, dGr, dSr(3, 3)
     real(dp) :: rc, r1, r2, r4, r5, r6, r8, r10, rc1, rc2, rc6, rc8, rc10
     real(dp) :: f6, df6, f8, df8, f10, df10
 
@@ -460,7 +459,7 @@ contains
     real(dp), allocatable :: c6(:, :), dc6dcn(:, :)
 
     nAtom = size(nNeighbour)
-    nRef = maxval(calc%numberOfReferences(species))
+    nRef = maxval(calc%numberOfReferences)
     allocate(zetaVec(nRef, nAtom), zetadcn(nRef, nAtom), c6(nAtom, nAtom), dc6dcn(nAtom, nAtom),&
         & dEdcn(nAtom))
 
@@ -471,11 +470,11 @@ contains
     call getAtomicC6(calc, nAtom, species, zetaVec, zetadcn, c6, dc6dcn)
 
     !$omp parallel do default(none) schedule(runtime) &
-    !$omp reduction(+:energies, gradients, stress, dEdcn) &
+    !$omp reduction(+:energies, gradients, sigma, dEdcn) &
     !$omp shared(nAtom, species, nNeighbour, neigh, coords, img2CentCell, c6, dc6dcn, calc, param) &
     !$omp private(iAt1, iSp1, iNeigh, iAt2, vec, iAt2f, iSp2, r2, r1, r4, r5, r6, r8, r10) &
     !$omp private(rc, rc1, rc2, rc6, rc8, rc10, dc6, dc6dcn1, dc6dcn2) &
-    !$omp private(dEr, dGr, grad, sigma, f6, f8, f10, df6, df8, df10)
+    !$omp private(dEr, dGr, grad, dSr, f6, f8, f10, df6, df8, df10)
     do iAt1 = 1, nAtom
       iSp1 = species(iAt1)
       do iNeigh = 1, nNeighbour(iAt1)
@@ -514,18 +513,18 @@ contains
         dGr = param%s6 * df6 + param%s8 * df8 * rc + param%s10 * rc * rc * 49.0_dp / 40.0_dp * df10
 
         grad(:) = -dGr*dc6 * vec / r1
-        sigma(:,:) = spread(grad, 1, 3) * spread(vec, 2, 3)
+        dSr(:, :) = spread(grad, 1, 3) * spread(vec, 2, 3)
 
         energies(iAt1) = energies(iAt1) - dEr*dc6/2
         dEdcn(iAt1) = dEdcn(iAt1) - dc6dcn1 * dEr
         if (iAt1 /= iAt2f) then
-          stress(:,:) = stress - sigma
+          sigma(:, :) = sigma - dSr
           energies(iAt2f) = energies(iAt2f) - dEr*dc6/2
           gradients(:, iAt1) = gradients(:, iAt1) + grad
           gradients(:, iAt2f) = gradients(:, iAt2f) - grad
           dEdcn(iAt2f) = dEdcn(iAt2f) - dc6dcn2 * dEr
         else
-          stress(:,:) = stress - 0.5_dp * sigma
+          sigma(:, :) = sigma - 0.5_dp * dSr
         end if
 
       end do
@@ -535,8 +534,8 @@ contains
     ! handle CN contributions to the gradient by matrix-vector operation
     call gemv(gradients, dcndr, dEdcn, beta=1.0_dp)
 
-    ! handle CN contributions to the stress tensor
-    call gemv(stress, dcndL, dEdcn, beta=1.0_dp)
+    ! handle CN contributions to the sigma tensor
+    call gemv(sigma, dcndL, dEdcn, beta=1.0_dp)
 
   end subroutine dispersionGradient
 

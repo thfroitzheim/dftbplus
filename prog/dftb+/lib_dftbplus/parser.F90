@@ -3994,6 +3994,10 @@ contains
 
     type(fnode), pointer :: value1, child, childval
     type(string) :: buffer
+    integer :: iSp
+    integer, allocatable :: izpDefault(:)
+    integer, parameter :: d3MaxNum = 94
+    logical :: unknownSpecies
 
     call getChildValue(node, "s6", input%s6, default=1.0_dp)
     call getChildValue(node, "s8", input%s8)
@@ -4007,6 +4011,34 @@ contains
     call convertByMul(char(buffer), lengthUnits, child, input%cutoffInter)
 
     call readCoordinationNumber(node, input%cnInput, geo, "exp", 0.0_dp)
+
+    ! Initialize default atomic numbers
+    allocate(izpDefault(size(geo%speciesNames)))
+    do iSp = 1, size(geo%speciesNames)
+      izpDefault(iSp) = symbolToNumber(geo%speciesNames(iSp))
+    end do
+
+    ! See if we find user specified overwrites for atomic numbers
+    call getChild(node, "AtomicNumbers", child, requested=.false.)
+    if (associated(child)) then
+      allocate(input%izp(size(geo%speciesNames)))
+      call readSpeciesList(child, geo%speciesNames, input%izp, izpDefault)
+      deallocate(izpDefault)
+    else
+      call move_alloc(izpDefault, input%izp)
+    end if
+
+    unknownSpecies = .false.
+    do iSp = 1, size(geo%speciesNames)
+      if (input%izp(iSp) <= 0 .or. input%izp(iSp) > d3MaxNum) then
+        unknownSpecies = .true.
+        call warning("Species '"//trim(geo%speciesNames(iSp))// &
+          & "' is not supported by DFT-D3")
+      end if
+    end do
+    if (unknownSpecies) then
+      call detailedError(node, "DFT-D3 does not support all species present")
+    end if
 
   end subroutine readSimpleDFTD3
 
