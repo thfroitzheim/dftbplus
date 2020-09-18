@@ -22,7 +22,7 @@ cmake_options=(
    "-DWITH_MPI=${WITH_MPI}"
    "-DELSI_VERSION=${ELSI_VERSION}"
    "-DWITH_API=true"
-   "-DFYPP_FLAGS='-DTRAVIS'"
+   "-DFYPP_FLAGS='-DTRAVIS -n'"
    "-DCOVERAGE_ANALYSIS=true"
 )
 
