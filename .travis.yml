@@ -24,3 +24,6 @@ install:
 
 script:
 - ./utils/test/travis-ci.sh
+
+after_success:
+- bash <(curl -s https://codecov.io/bash) -f "!^#test#*"

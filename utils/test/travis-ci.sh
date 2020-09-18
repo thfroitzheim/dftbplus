@@ -23,6 +23,7 @@ cmake_options=(
    "-DELSI_VERSION=${ELSI_VERSION}"
    "-DWITH_API=true"
    "-DFYPP_FLAGS='-DTRAVIS'"
+   "-DCOVERAGE_ANALYSIS=true"
 )
 
 if [ "$TRAVIS_PULL_REQUEST" != "false" ]; then
