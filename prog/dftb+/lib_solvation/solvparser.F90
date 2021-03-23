@@ -263,11 +263,14 @@ contains
 
     type(string) :: buffer, modifier
     type(fnode), pointer :: child, value1, field
-    real(dp) :: temperature, shift, radScale
+    real(dp) :: temperature, shift, radScale, alphaX
     type(TSolventData) :: solvent
 
     call readSolvent(node, solvent)
-    input%dielectricConst = solvent%dielectricConstant
+
+    call getChildValue(node, "Alpha", alphaX, 0.0_dp)
+    input%alpbet = alphaX / solvent%dielectricConstant
+    input%keps = (1.0_dp / solvent%dielectricConstant - 1.0_dp) / (1.0_dp + input%alpbet)
 
     ! shift value for the free energy (usually zero)
     call getChildValue(node, "FreeEnergyShift", shift, 0.0_dp, modifier=modifier, &

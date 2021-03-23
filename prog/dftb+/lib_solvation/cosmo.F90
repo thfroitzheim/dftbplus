@@ -35,8 +35,11 @@ module dftbp_cosmo
     !> Energy shift to the reference system
     real(dp) :: freeEnergyShift
 
-    !> Dielectric constant
-    real(dp) :: dielectricConst
+    !> Dielectric screening
+    real(dp) :: keps
+
+    !> Analytical linearized Poission-Boltzmann parameter alpha
+    real(dp) :: alpbet
 
     !> Grid for numerical integration of atomic surfaces
     integer :: gridSize
@@ -74,8 +77,11 @@ module dftbp_cosmo
     !> ddcosmo adjoint solution s(nylm, nAtom)
     real(dp), allocatable :: s(:, :)
 
-    !> Dielectric constant
-    real(dp) :: dielectricConst
+    !> Dielectric screening
+    real(dp) :: keps
+
+    !> Analytical linearized Poission-Boltzmann parameter alpha
+    real(dp) :: alpbet
 
     !> Energy shift to the reference system
     real(dp) :: freeEnergyShift
@@ -172,7 +178,8 @@ contains
     this%tCoordsUpdated = .false.
 
     this%nAtom = nAtom
-    this%dielectricConst = input%dielectricConst
+    this%keps = input%keps
+    this%alpbet = input%alpbet
     this%freeEnergyShift = input%freeEnergyShift
 
     allocate(this%vdwRad(nAtom))
@@ -211,7 +218,7 @@ contains
     type(TCosmo), intent(in) :: solvation
 
     write(unit, '(a, ":", t30, es14.6)') "Dielectric constant", &
-        & solvation%dielectricConst
+        & 1.0_dp/(solvation%keps * (1.0_dp + solvation%alpbet) + 1.0_dp)
     write(unit, '(a, ":", t30, es14.6, 1x, a, t50, es14.6, 1x, a)') &
         & "Free energy shift", solvation%freeEnergyShift, "H", &
         & Hartree__eV * solvation%freeEnergyShift, "eV"
@@ -316,7 +323,7 @@ contains
       energies(:) = 0.0_dp
     end if
 
-    keps = 0.5_dp * (1.0_dp - 1.0_dp/this%dielectricConst)
+    keps = 0.5_dp * this%keps
     do iat = 1, size(energies)
       energies(iat) = keps * dot_product(this%sigma(:, iat), this%psi(:, iat)) &
          & + this%freeEnergyShift / real(this%nAtom, dp) + energies(iat)
@@ -361,7 +368,7 @@ contains
       call this%sasaCont%addGradients(env, neighList, species, coords, img2CentCell, gradients)
     end if
 
-    keps = 0.5_dp * (1.0_dp - 1.0_dp/this%dielectricConst)
+    keps = 0.5_dp * this%keps
 
     allocate(fx(3, this%nAtom), zeta(this%ddCosmo%ncav), &
       & ef1(3, this%ddCosmo%ncav), ef2(3, this%nAtom))
@@ -544,7 +551,7 @@ contains
       shiftPerShell(:,:) = 0.0_dp
     end if
 
-    keps = 0.5_dp * (1.0_dp - 1.0_dp/this%dielectricConst)
+    keps = 0.5_dp * this%keps
     shiftPerAtom(:) = keps * this%sigma(1, :) * sqrt(fourpi) + shiftPerAtom
 
     ! we abuse Phi to store the unpacked and scaled value of s

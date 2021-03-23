@@ -3224,6 +3224,7 @@ expressed as the solvation energy
 \begin{equation}
   \Delta G_\text{GB} =
   -\frac12 \left(\frac1{\epsilon_\text{in}}-\frac1{\epsilon_\text{out}}\right)
+  \left(\frac1{1+\alpha\epsilon_\text{in}/\epsilon_\text{out}}\right)
   \sum_{\text{A}=1}^N\sum_{\text{B}=1}^N\frac{q_\text{A}q_\text{B}}
   {\left(R^2_\text{AB} + a_\text{A}a_\text{B}\exp\left[-\frac{R^2_\text{AB}}
   {4a_\text{A}a_\text{B}}\right]\right)^{\frac12}}.
@@ -3380,7 +3381,8 @@ systems.
 
   \item[\is{Alpha}]
     Alpha parameter in the ALPB model, should be kept to 0.571412 which was
-    derived from first principles.\cite{sigalov2006}
+    derived from first principles.
+    Does not affect results in the limit of $\varepsilon\to\infty$.
 \end{description}
 
 Example for a GB model with CS2 as solvent:
@@ -3500,6 +3502,7 @@ In the domain decomposition algorithm the solvation energy is given by
 \begin{equation}
   E_\text{solv} =
   \frac12 \left(\frac1{\epsilon_\text{in}}-\frac1{\epsilon_\text{out}}\right)
+  \left(\frac1{1+\alpha\epsilon_\text{in}/\epsilon_\text{out}}\right)
   \sum^{N_\text{atoms}}_{j=1}
   \sum^{N_\text{basis}}_{l=0}\sum^{l}_{m=-l}
   \left[\Psi_j\right]^m_l \left[X_j\right]^m_l
@@ -3532,6 +3535,7 @@ where $\Psi^j_n$ is the solute's potential at the $n$-th grid point.
   \kw{FreeEnergyShift} & r & & 0.0 Eh & \\
   \kw{Temperature} & r & & 298.15 K & \\
   \kw{State} & s & & gsolv & \\
+  \kw{Alpha} & r & & 0.0 & \\
   \kw{AngularGrid} & i & & & \\
   \kw{Radii} & m & & \kw{vanDerWaalsRadiiD3} & \\
   \kw{RadiiScaling} & r & & & \\
@@ -3569,6 +3573,14 @@ where $\Psi^j_n$ is the solute's potential at the $n$-th grid point.
     ``reference'' corresponds to 1\;bar of ideal gas and 1\;mol/L of liquid
     solution at infinite dilution,
     ``mol1bar'' corresponds to 1\;bar ideal gas and 1\;mol/L of liquid solution.
+
+  \item[\is{Alpha}]
+    Empirical scaling parameter $x$ in $f(\varepsilon)=\frac{\varepsilon-1}{\varepsilon+x}$
+    used in some COSMO implementations. Identical to alpha parameter in the ALPB model.
+
+    Defaults to zero. A Common empirical value used is 0.5,
+    a non-emprical value consistent with the ALPB model is 0.571412.\cite{sigalov2006}
+    Does not affect results in the limit of $\varepsilon\to\infty$.
 
   \item[\is{AngularGrid}]
     Size of the angular Lebedev--Laikov integration grid.\cite{lebedev1999}
