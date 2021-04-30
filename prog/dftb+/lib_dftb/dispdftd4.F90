@@ -1393,7 +1393,7 @@ contains
 
     dispMat(:, :, :, :) = 0.0_dp
 
-    !$omp parallel do default(none) schedule(runtime) reduction(+:dispMat) &
+    !$omp parallel do default(none) schedule(runtime) shared(dispMat) &
     !$omp shared(iAtFirst, iAtLast, calc, ref, species, nNeighbour, neigh) &
     !$omp shared(img2CentCell, gwVec) private(iAt1, iSp1, iNeigh, iAt2) &
     !$omp private(iRef1, iRef2, nRef1, nRef2, iAt2f, iSp2, r2, r4, r6, r8, r10) &
@@ -1422,22 +1422,27 @@ contains
         f10 = 1.0_dp / (r10 + rc10)
 
         dEr = calc%s6 * f6 + calc%s8 * f8 * rc + calc%s10 * rc * rc * 49.0_dp / 40.0_dp * f10
-        nRef1 = ref%nRef(iSp1)
-        nRef2 = ref%nRef(iSp2)
         do iRef1 = 1, nRef1
           refc6(:nRef2) = ref%c6(:nRef2, iRef1, iSp2, iSp1) * gwVec(:nRef2, iAt2f)
           dispMat(:nRef2, iAt2f, iRef1, iAt1) = dispMat(:nRef2, iAt2f, iRef1, iAt1) &
               & - (dEr * gwVec(iRef1, iAt1)) * refc6(:nRef2)
         end do
 
-        if (iAt1 /= iAt2) then
-          do iRef2 = 1, nRef2
-            refc6(:nRef1) = ref%c6(:nRef1, iRef2, iSp1, iSp2) * gwVec(:nRef1, iAt1)
-            dispMat(:nRef1, iAt1, iRef2, iAt2f) = dispMat(:nRef1, iAt1, iRef2, iAt2f) &
-                & - (dEr * gwVec(iRef2, iAt2f)) * refc6(:nRef1)
-          end do
-        end if
+      end do
+    end do
 
+    !$omp parallel do default(none) schedule(runtime) shared(dispMat) &
+    !$omp shared(iAtFirst, iAtLast, ref, species) &
+    !$omp private(iAt1, iSp1, iRef1, iRef2, iAt2f, iSp2)
+    do iAt1 = iAtFirst, iAtLast
+      iSp1 = species(iAt1)
+      do iAt2f = 1, iAt1 - 1
+        iSp2 = species(iAt2f)
+        do iRef1 = 1, ref%nRef(iSp1)
+          do iRef2 = 1, ref%nRef(iSp2)
+            dispMat(iRef1, iAt1, iRef2, iAt2f) = dispMat(iRef2, iAt2f, iRef1, iAt1)
+          end do
+        end do
       end do
     end do
 
