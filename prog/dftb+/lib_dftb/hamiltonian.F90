@@ -12,20 +12,21 @@ module dftbp_hamiltonian
   use dftbp_accuracy, only : dp, lc
   use dftbp_assert
   use dftbp_commontypes, only : TOrbitals
+  use dftbp_dftbplusu, only : TDftbU
+  use dftbp_dispersions, only : TDispersionIface
+  use dftbp_environment, only : TEnvironment
+  use dftbp_extfields, only : TEField
+  use dftbp_integrals, only : TIntegralCont
+  use dftbp_message, only : error
   use dftbp_periodic, only : TNeighbourList
   use dftbp_potentials, only : TPotentials
-  use dftbp_shift, only : add_shift, total_shift, addOnSiteShift
+  use dftbp_scc, only : TScc
+  use dftbp_shift, only : addShift, totalShift, addOnSiteShift, addAtomicMultipoleShift
+  use dftbp_solvation, only : TSolvation
   use dftbp_spin, only : getSpinShift
   use dftbp_spinorbit, only : getDualSpinOrbitShift
-  use dftbp_dftbplusu, only : TDftbU
-  use dftbp_message, only : error
-  use dftbp_thirdorder, only : TThirdOrder
-  use dftbp_solvation, only : TSolvation
-  use dftbp_environment, only : TEnvironment
-  use dftbp_scc, only : TScc
   use dftbp_tblite, only : TTBLite
-  use dftbp_dispersions, only : TDispersionIface
-  use dftbp_extfields, only : TEField
+  use dftbp_thirdorder, only : TThirdOrder
   implicit none
 
   private
@@ -87,8 +88,8 @@ contains
     !> Potential energy contributions
     type(TPotentials), intent(inout) :: potential
 
-    call total_shift(potential%extShell, potential%extAtom, orb, species)
-    call total_shift(potential%extBlock, potential%extShell, orb, species)
+    call totalShift(potential%extShell, potential%extAtom, orb, species)
+    call totalShift(potential%extBlock, potential%extShell, orb, species)
 
   end subroutine mergeExternalPotentials
 
@@ -132,7 +133,7 @@ contains
   !> spin, and where relevant dispersion
   subroutine addChargePotentials(env, sccCalc, tblite, updateScc, qInput, q0, chargePerShell,&
       & orb, species, neighbourList, img2CentCell, spinW, solvation, thirdOrd, potential,&
-      & dispersion)
+      & dispersion, dipAtom, quadAtom)
 
     !> Environment settings
     type(TEnvironment), intent(inout) :: env
@@ -182,9 +183,15 @@ contains
     !> Dispersion interactions object
     class(TDispersionIface), allocatable, intent(inout) :: dispersion
 
+    !> Dipole populations for each atom
+    real(dp), intent(in), optional :: dipAtom(:,:)
+
+    !> Quadrupole populations for each atom
+    real(dp), intent(in), optional :: quadAtom(:,:)
+
     ! local variables
     real(dp), allocatable :: atomPot(:,:)
-    real(dp), allocatable :: shellPot(:,:,:)
+    real(dp), allocatable :: shellPot(:,:,:), dipolePot(:,:,:), quadrupolePot(:,:,:)
     integer, pointer :: pSpecies0(:)
     integer :: nAtom, nSpin
 
@@ -194,6 +201,8 @@ contains
 
     allocate(atomPot(nAtom, nSpin), source=0.0_dp)
     allocate(shellPot(orb%mShell, nAtom, nSpin), source=0.0_dp)
+    allocate(dipolePot(3, nAtom, nSpin), source=0.0_dp)
+    allocate(quadrupolePot(6, nAtom, nSpin), source=0.0_dp)
 
     if (allocated(sccCalc)) then
       if (updateScc) then
@@ -207,7 +216,7 @@ contains
         ! need to retain the just electrostatic contributions to the potential for a contact
         ! calculation or similar
         potential%coulombShell(:,:,:) = shellPot(:,:,1:1)
-        call total_shift(potential%coulombShell, atomPot(:,1:1), orb, species)
+        call totalShift(potential%coulombShell, atomPot(:,1:1), orb, species)
       end if
     end if
 
@@ -220,8 +229,12 @@ contains
     potential%intShell(:,:,1) = potential%intShell(:,:,1) + shellPot(:,:,1)
 
     if (allocated(tblite)) then
-      call tblite%updateCharges(env, species, neighbourList, qInput, q0, img2CentCell, orb)
-      call tblite%getShifts(atomPot(:,1), shellPot(:,:,1))
+      call tblite%updatePopulations(env, species, neighbourList, img2CentCell, orb, &
+        & qInput, q0, dipAtom, quadAtom)
+      call tblite%getShifts(atomPot(:,1), shellPot(:,:,1), dipolePot(:,:,1), &
+        & quadrupolePot(:,:,1))
+      potential%dipoleAtom(:,:,1) = potential%dipoleAtom(:,:,1) + dipolePot(:,:,1)
+      potential%quadrupoleAtom(:,:,1) = potential%quadrupoleAtom(:,:,1) + quadrupolePot(:,:,1)
       potential%intAtom(:,1) = potential%intAtom(:,1) + atomPot(:,1)
       potential%intShell(:,:,1) = potential%intShell(:,:,1) + shellPot(:,:,1)
     end if
@@ -245,8 +258,8 @@ contains
       potential%intShell = potential%intShell + shellPot
     end if
 
-    call total_shift(potential%intShell, potential%intAtom, orb, species)
-    call total_shift(potential%intBlock, potential%intShell, orb, species)
+    call totalShift(potential%intShell, potential%intAtom, orb, species)
+    call totalShift(potential%intBlock, potential%intShell, orb, species)
 
   end subroutine addChargePotentials
 
@@ -289,14 +302,14 @@ contains
 
 
   !> Returns the Hamiltonian for the given scc iteration
-  subroutine getSccHamiltonian(H0, over, nNeighbourSK, neighbourList, species, orb, iSparseStart,&
+  subroutine getSccHamiltonian(H0, ints, nNeighbourSK, neighbourList, species, orb, iSparseStart,&
       & img2CentCell, potential, isREKS, ham, iHam)
 
     !> non-SCC hamiltonian (sparse)
     real(dp), intent(in) :: H0(:)
 
-    !> overlap (sparse)
-    real(dp), intent(in) :: over(:)
+    !> Container for handling integrals
+    type(TIntegralCont), intent(inout) :: ints
 
     !> Number of atomic neighbours
     integer, intent(in) :: nNeighbourSK(:)
@@ -337,21 +350,28 @@ contains
       ham(:,1) = h0
     end if
 
-    call add_shift(ham, over, nNeighbourSK, neighbourList%iNeighbour, species, orb, iSparseStart,&
+    call addShift(ham, ints%overlap, nNeighbourSK, neighbourList%iNeighbour, species, orb, iSparseStart,&
         & nAtom, img2CentCell, potential%intBlock)
 
     if (allocated(potential%intOnSiteAtom)) then
-      call addOnSiteShift(ham, over, species, orb, iSparseStart, nAtom, potential%intOnSiteAtom)
+      call addOnSiteShift(ham, ints%overlap, species, orb, iSparseStart, nAtom, potential%intOnSiteAtom)
     end if
     if (allocated(potential%extOnSiteAtom)) then
-      call addOnSiteShift(ham, over, species, orb, iSparseStart, nAtom, potential%extOnSiteAtom)
+      call addOnSiteShift(ham, ints%overlap, species, orb, iSparseStart, nAtom, potential%extOnSiteAtom)
     end if
 
     if (allocated(iHam)) then
       iHam(:,:) = 0.0_dp
-      call add_shift(iHam, over, nNeighbourSK, neighbourList%iNeighbour, species, orb,&
+      call addShift(iHam, ints%overlap, nNeighbourSK, neighbourList%iNeighbour, species, orb,&
           & iSparseStart, nAtom, img2CentCell, potential%iorbitalBlock)
     end if
+
+    call addAtomicMultipoleShift(ham, ints%dipoleBra, ints%dipoleKet, nNeighbourSK,&
+        & neighbourList%iNeighbour, species, orb, iSparseStart, nAtom, img2CentCell, &
+        & potential%dipoleAtom)
+    call addAtomicMultipoleShift(ham, ints%quadrupoleBra, ints%quadrupoleKet, nNeighbourSK,&
+        & neighbourList%iNeighbour, species, orb, iSparseStart, nAtom, img2CentCell, &
+        & potential%quadrupoleAtom)
 
   end subroutine getSccHamiltonian
 

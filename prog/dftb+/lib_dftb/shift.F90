@@ -16,28 +16,28 @@ module dftbp_shift
   implicit none
 
   private
-  public :: add_shift, total_shift, addOnsiteShift
+  public :: addShift, totalShift, addOnsiteShift, addAtomicMultipoleShift
 
 
   !> add shifts to a given Hamiltonian
-  interface add_shift
-    module procedure add_shift_atom
-    module procedure add_shift_lshell
-    module procedure add_shift_block
-  end interface add_shift
+  interface addShift
+    module procedure addShiftAtom
+    module procedure addShiftLShell
+    module procedure addShiftBlock
+  end interface addShift
 
 
   !> Totals together shifts to get composites
-  interface total_shift
-    module procedure addatom_shell
-    module procedure addshell_block
-  end interface total_shift
+  interface totalShift
+    module procedure addAtomShell
+    module procedure addShellBlock
+  end interface totalShift
 
 contains
 
 
   !> Regular atomic shift (potential is only dependent on number of atom)
-  subroutine add_shift_atom(ham,over,nNeighbour,iNeighbour,species,orb,iPair, nAtom,img2CentCell, &
+  subroutine addShiftAtom(ham,over,nNeighbour,iNeighbour,species,orb,iPair, nAtom,img2CentCell, &
       & shift)
 
     !> The resulting Hamiltonian contribution.
@@ -103,11 +103,11 @@ contains
       end do
     end do
 
-  end subroutine add_shift_atom
+  end subroutine addShiftAtom
 
 
   !> l-dependent shift (potential is dependent on number of atom and l-shell)
-  subroutine add_shift_lshell( ham,over,nNeighbour,iNeighbour,species,orb,iPair,nAtom,img2CentCell,&
+  subroutine addShiftLShell( ham,over,nNeighbour,iNeighbour,species,orb,iPair,nAtom,img2CentCell,&
       & shift )
 
     !> The resulting Hamiltonian contribution.
@@ -180,12 +180,12 @@ contains
       end do
     end do
 
-  end subroutine add_shift_lshell
+  end subroutine addShiftLShell
 
 
   !> shift depending on occupation-matrix like potentials. To use this for lm-dependent potentials,
   !> use a diagonal shift matrix
-  subroutine add_shift_block( ham,over,nNeighbour,iNeighbour,species,orb,iPair,nAtom,img2CentCell, &
+  subroutine addShiftBlock( ham,over,nNeighbour,iNeighbour,species,orb,iPair,nAtom,img2CentCell, &
       & shift )
 
     !> The resulting Hamiltonian contribution.
@@ -258,11 +258,82 @@ contains
       end do
     end do
 
-  end subroutine add_shift_block
+  end subroutine addShiftBlock
+
+
+  subroutine addAtomicMultipoleShift(ham, mpintBra, mpintKet, nNeighbour, iNeighbour, &
+      & species, orb, iPair, nAtom, img2CentCell, shift)
+
+    !> The resulting Hamiltonian contribution.
+    real(dp), intent(inout) :: ham(:,:)
+
+    !> Multipole integrals
+    real(dp), intent(in) :: mpintBra(:, :), mpintKet(:, :)
+
+    !> Number of neighbours surrounding each atom.
+    integer, intent(in) :: nNeighbour(:)
+
+    !> List of neighbours for each atom.
+    integer, intent(in) :: iNeighbour(0:,:)
+
+    !> List of the species of each atom.
+    integer, intent(in) :: species(:)
+
+    !> Contains Information about the atomic orbitals in the system
+    type(TOrbitals), intent(in) :: orb
+
+    !> Indexing array for the Hamiltonian.
+    integer, intent(in) :: iPair(0:,:)
+
+    !> Index mapping atoms onto the central cell atoms.
+    integer, intent(in) :: nAtom
+
+    !> Shift to add at atom sites, listed as (0:nOrb,0:nOrb,1:nAtom)
+    integer, intent(in) :: img2CentCell(:)
+
+    real(dp), intent(in) :: shift(:,:,:)
+
+    integer :: iAt1, iAt2, img, ind, nBlk, iOrig, iSp1, iSp2, iOrb1, iOrb2
+    integer :: iNeigh, iSpin, nSpin
+
+    @:ASSERT(size(nNeighbour)==nAtom)
+    @:ASSERT(size(iNeighbour,dim=2)==nAtom)
+    @:ASSERT(size(species)>=maxval(iNeighbour))
+    @:ASSERT(size(species)<=size(img2CentCell))
+    @:ASSERT(size(iPair,dim=1)>=(maxval(nNeighbour)+1))
+    @:ASSERT(size(iPair,dim=2)==nAtom)
+    @:ASSERT(all(shape(mpintKet)==shape(mpintBra)))
+    @:ASSERT(size(shift,dim=1)==size(mpintKet,dim=1))
+    @:ASSERT(size(shift,dim=2)==nAtom)
+
+    nSpin = size(ham,dim=2)
+
+    do iSpin = 1, nSpin
+      do iAt1 = 1, nAtom
+        iSp1 = species(iAt1)
+        do iNeigh = 0, nNeighbour(iAt1)
+          img = iNeighbour(iNeigh, iAt1)
+          iAt2 = img2CentCell(img)
+          iSp2 = species(iAt2)
+          ind = iPair(iNeigh, iAt1)
+          nBlk = orb%nOrbSpecies(iSp2)
+
+          do iOrb1 = 1, orb%nOrbSpecies(iSp1)
+            do iOrb2 = 1, nBlk
+              iOrig = ind + iOrb2 + nBlk*(iOrb1-1)
+              ham(iOrig, iSpin) = ham(iOrig, iSpin) &
+                & + 0.5_dp * dot_product(shift(:, iAt1, iSpin), mpintKet(:, iOrig)) &
+                & + 0.5_dp * dot_product(shift(:, iAt2, iSpin), mpintBra(:, iOrig))
+            end do
+          end do
+        end do
+      end do
+    end do
+  end subroutine addAtomicMultipoleShift
 
 
   !> Add a shift for atom resolved potetial to shell resolved potential
-  subroutine addatom_shell(shiftshell, atom, orb, species)
+  subroutine addAtomShell(shiftshell, atom, orb, species)
 
     !> Shift to add at atomic shells
     real(dp), intent(inout) :: shiftshell(:,:,:)
@@ -294,11 +365,11 @@ contains
       end do
     end do
 
-  end subroutine addatom_shell
+  end subroutine addAtomShell
 
 
   !> Add a shift for shell resolved potetial to block resolved potential
-  subroutine addshell_block(shiftblock, shell, orb, species)
+  subroutine addShellBlock(shiftblock, shell, orb, species)
 
     !> block resolved shift
     real(dp), intent(inout) :: shiftblock(:,:,:,:)
@@ -336,7 +407,7 @@ contains
       end do
     end do
 
-  end subroutine addshell_block
+  end subroutine addShellBlock
 
 
   !> Add on-site only atomic shift (potential is not only dependent on overlap, only the number of

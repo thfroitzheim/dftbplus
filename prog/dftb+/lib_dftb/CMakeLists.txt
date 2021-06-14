@@ -33,6 +33,7 @@ set(sources-fpp
   ${curdir}/h5correction.F90
   ${curdir}/halogenx.F90
   ${curdir}/hamiltonian.F90
+  ${curdir}/integrals.F90
   ${curdir}/nonscc.F90
   ${curdir}/onscorrection.F90
   ${curdir}/orbitalequiv.F90

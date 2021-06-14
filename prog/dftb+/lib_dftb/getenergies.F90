@@ -16,7 +16,6 @@ module dftbp_getenergies
   use dftbp_commontypes, only : TOrbitals
   use dftbp_periodic, only : TNeighbourList
   use dftbp_potentials, only : TPotentials
-  use dftbp_shift, only : add_shift, total_shift
   use dftbp_spin, only : getSpinShift
   use dftbp_spinorbit, only : getDualSpinOrbitShift, getDualSpinOrbitEnergy
   use dftbp_dftbplusu, only : TDftbU

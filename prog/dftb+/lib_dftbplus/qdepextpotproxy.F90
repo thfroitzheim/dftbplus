@@ -10,7 +10,7 @@ module dftbp_qdepextpotproxy
   use dftbp_accuracy, only : dp
   use dftbp_qdepextpotgen, only : TQDepExtPotGen, TQDepExtPotGenWrapper
   use dftbp_commontypes, only : TOrbitals
-  use dftbp_shift, only : total_shift
+  use dftbp_shift, only : totalShift
   implicit none
   
   private
@@ -96,8 +96,8 @@ contains
       this%energyAtom(:) = this%energyAtom + deltaQAtom * potAtomTmp
       this%energyAtom(:) = this%energyAtom + sum(deltaQShell * potShellTmp, dim=1)
     end do
-    call total_shift(potShell, potAtom, orb, species)
-    call total_shift(potential, potShell, orb, species)
+    call totalShift(potShell, potAtom, orb, species)
+    call totalShift(potential, potShell, orb, species)
 
   end subroutine TQDepExtPotProxy_addPotential
 

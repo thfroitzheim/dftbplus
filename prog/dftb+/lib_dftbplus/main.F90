@@ -41,7 +41,8 @@ module dftbp_main
   use dftbp_repulsive, only : TRepulsive
   use dftbp_etemp, only : electronFill, Efilling
   use dftbp_populations, only : getChargePerShell, denseSubtractDensityOfAtoms, mulliken,&
-      & denseMulliken, denseBlockMulliken, skewMulliken, getOnsitePopulation
+      & denseMulliken, denseBlockMulliken, skewMulliken, getOnsitePopulation, &
+      & getAtomicMultipolePopulation
   use dftbp_densitymatrix, only : makeDensityMatrix
   use dftbp_forces, only : derivative_shift
   use dftbp_stress, only : getkineticstress, getBlockStress, getBlockiStress, getNonSCCStress
@@ -49,6 +50,7 @@ module dftbp_main
   use dftbp_hamiltonian, only : resetInternalPotentials, addChargePotentials, getSccHamiltonian
   use dftbp_hamiltonian, only : mergeExternalPotentials
   use dftbp_hamiltonian, only : resetExternalPotentials, addBlockChargePotentials
+  use dftbp_integrals, only : TIntegralCont
   use dftbp_getenergies, only : calcEnergies, calcDispersionEnergy, sumEnergies
   use dftbp_onsitecorrection, only : Onsblock_expand, onsBlock_reduce, addOnsShift
   use dftbp_periodic, only : TNeighbourList, updateNeighbourListAndSpecies, cart2frac,&
@@ -69,7 +71,7 @@ module dftbp_main
 #:if not WITH_SCALAPACK
   use dftbp_blasroutines, only : symm, hemm
 #:endif
-  use dftbp_shift, only : add_shift
+  use dftbp_shift, only : addShift
   use dftbp_spinorbit, only : addOnsiteSpinOrbitHam, getOnsiteSpinOrbitEnergy
   use dftbp_angmomentum, only : getLOnsite, getLDual
   use dftbp_pmlocalisation, only : TPipekMezey
@@ -225,7 +227,8 @@ contains
         if (isUnReduced) then
           call reduceCharges(this%orb, this%nIneqOrb, this%iEqOrbitals, this%qInput, this%qInpRed,&
               & this%qBlockIn, this%dftbU, this%iEqBlockDftbu, this%qiBlockIn,&
-              & this%iEqBlockDftbuLS, this%iEqBlockOnSite, this%iEqBlockOnSiteLS)
+              & this%iEqBlockDftbuLS, this%iEqBlockOnSite, this%iEqBlockOnSiteLS,&
+              & this%mixDipoles, this%dipAtom, this%mixQuadrupoles, this%quadAtom)
         end if
 
         call processGeometry(this, env, iGeoStep, iLatGeoStep, tWriteRestart, tStopScc, tExitGeoOpt)
@@ -351,8 +354,8 @@ contains
 
     ! Here time propagation is called
     if (allocated(this%electronDynamics)) then
-      call runDynamics(this%electronDynamics, this%eigvecsReal, this%ham, this%H0, this%species,&
-          & this%q0, this%referenceN0, this%over, this%filling, this%neighbourList,&
+      call runDynamics(this%electronDynamics, this%eigvecsReal, this%ints,&
+          & this%species, this%q0, this%referenceN0, this%filling, this%neighbourList,&
           & this%nNeighbourSK, this%nNeighbourLC, this%denseDesc%iAtomStart, this%iSparseStart,&
           & this%img2CentCell, this%orb, this%coord0, this%spinW, this%repulsive, env,&
           & this%tDualSpinOrbit, this%xi, this%thirdOrd, this%solvation, this%rangeSep,&
@@ -372,15 +375,16 @@ contains
     end if
 
     if (this%tLocalCurrents) then
-      call this%negfInt%local_currents(env, this%parallelKS%localKS, this%ham, this%over,&
-          & this%neighbourList, this%nNeighbourSK, this%cutOff%skCutoff, this%denseDesc%iAtomStart,&
-          & this%iSparseStart, this%img2CentCell, this%iCellVec, this%cellVec, this%rCellVec,&
-          & this%orb, this%kPoint, this%kWeight, this%coord0Fold, this%species0, this%speciesName,&
-          & this%mu, this%lCurrArray)
+      call this%negfInt%local_currents(env, this%parallelKS%localKS, this%ints%hamiltonian,&
+          & this%ints%overlap, this%neighbourList, this%nNeighbourSK, this%cutOff%skCutoff,&
+          & this%denseDesc%iAtomStart, this%iSparseStart, this%img2CentCell, this%iCellVec,&
+          & this%cellVec, this%rCellVec, this%orb, this%kPoint, this%kWeight, this%coord0Fold,&
+          & this%species0, this%speciesName, this%mu, this%lCurrArray)
     end if
 
     if (this%tTunn) then
-      call this%negfInt%calc_current(env, this%parallelKS%localKS, this%ham, this%over,&
+      call this%negfInt%calc_current(env, this%parallelKS%localKS, this%ints%hamiltonian,&
+          & this%ints%overlap,&
           & this%neighbourList%iNeighbour, this%nNeighbourSK, this%densedesc%iAtomStart,&
           & this%iSparseStart, this%img2CentCell, this%iCellVec, this%cellVec, this%orb,&
           & this%kPoint, this%kWeight, this%tunneling, this%current, this%ldos, this%leadCurrents,&
@@ -392,7 +396,7 @@ contains
     if (this%isDFTBPT) then
       if (this%isStatEResp .and. .not.(this%tPeriodic .or. this%tNegf)) then
         call staticPerturWrtE(env, this%parallelKS, this%filling, this%eigen, this%eigVecsReal,&
-            & this%eigvecsCplx, this%ham, this%over, this%orb, this%nAtom, this%species,&
+            & this%eigvecsCplx, this%ints%hamiltonian, this%ints%overlap, this%orb, this%nAtom, this%species,&
             & this%neighbourList, this%nNeighbourSK, this%denseDesc, this%iSparseStart,&
             & this%img2CentCell, this%coord, this%scc, this%maxSccIter, this%sccTol,&
             & this%isSccConvRequired, this%nMixElements, this%nIneqOrb, this%iEqOrbitals,&
@@ -426,7 +430,7 @@ contains
         call error("Pipek-Mezey localisation not implemented for non-colinear DFTB")
       end if
       call calcPipekMezeyLocalisation(env, this%pipekMezey, this%tPrintEigvecsTxt, this%nEl,&
-          & this%filling, this%over, this%kPoint, this%neighbourList, this%nNeighbourSk,&
+          & this%filling, this%ints%overlap, this%kPoint, this%neighbourList, this%nNeighbourSk,&
           & this%denseDesc, this%iSparseStart, this%img2CentCell, this%iCellVec, this%cellVec,&
           & this%runId, this%orb, this%species, this%speciesName, this%parallelKS, localisation,&
           & this%eigvecsReal, this%SSqrReal, this%eigvecsCplx, this%SSqrCplx, this%tHelical,&
@@ -662,8 +666,8 @@ contains
           & this%cutOff, this%orb, this%tPeriodic, this%tHelical, this%scc, this%tblite, this%repulsive,&
           & this%dispersion,this%solvation, this%thirdOrd, this%rangeSep, this%reks,&
           & this%img2CentCell, this%iCellVec, this%neighbourList, this%nAllAtom, this%coord0Fold,&
-          & this%coord,this%species, this%rCellVec, this%nNeighbourSk, this%nNeighbourLC, this%ham,&
-          & this%over, this%H0, this%rhoPrim, this%iRhoPrim, this%iHam, this%ERhoPrim,&
+          & this%coord,this%species, this%rCellVec, this%nNeighbourSk, this%nNeighbourLC,&
+          & this%ints, this%rhoPrim, this%iRhoPrim, this%ERhoPrim,&
           & this%iSparseStart, this%cm5Cont, stat)
         @:HANDLE_ERROR(stat)
     end if
@@ -690,15 +694,16 @@ contains
     case default
       call error("Invalid Hamiltonian")
     case(hamiltonianTypes%dftb)
-      call buildH0(env, this%H0, this%skHamCont, this%atomEigVal, this%coord, this%nNeighbourSk,&
+      call buildH0(env, this%ints%hcore, this%skHamCont, this%atomEigVal, this%coord, this%nNeighbourSk,&
           & this%neighbourList%iNeighbour, this%species, this%iSparseStart, this%orb)
-      call buildS(env, this%over, this%skOverCont, this%coord, this%nNeighbourSk,&
+      call buildS(env, this%ints%overlap, this%skOverCont, this%coord, this%nNeighbourSk,&
           & this%neighbourList%iNeighbour, this%species, this%iSparseStart, this%orb)
     case(hamiltonianTypes%xtb)
       @:ASSERT(allocated(this%tblite))
       call this%tblite%buildSH0(env, this%species, this%coord, this%nNeighbourSk, &
           & this%neighbourList%iNeighbour, this%img2CentCell, this%iSparseStart, &
-          & this%orb, this%H0, this%over)
+          & this%orb, this%ints%hcore, this%ints%overlap, this%ints%dipoleBra, &
+          & this%ints%dipoleKet, this%ints%quadrupoleBra, this%ints%quadrupoleKet)
     end select
     call env%globalTimer%stopTimer(globalTimers%sparseH0S)
 
@@ -741,9 +746,9 @@ contains
         call openDetailedOut(this%fdDetailedOut, userOut, tAppendDetailedOut)
       end if
       ! We need to define hamltonian by adding the potential
-      call getSccHamiltonian(this%H0, this%over, this%nNeighbourSK, this%neighbourList,&
+      call getSccHamiltonian(this%ints%hcore, this%ints, this%nNeighbourSK, this%neighbourList,&
           & this%species, this%orb, this%iSparseStart, this%img2CentCell, this%potential,&
-          & allocated(this%reks), this%ham, this%iHam)
+          & allocated(this%reks), this%ints%hamiltonian, this%ints%iHamiltonian)
       tExitGeoOpt = .true.
       return
     end if
@@ -768,7 +773,7 @@ contains
       lpSCC_REKS: do iSccIter = 1, this%maxSccIter
 
         if (iSccIter == 1) then
-          call getReksInitialSettings(env, this%denseDesc, this%h0, this%over, this%neighbourList,&
+          call getReksInitialSettings(env, this%denseDesc, this%ints%hcore, this%ints%overlap, this%neighbourList,&
               & this%nNeighbourSK, this%iSparseStart, this%img2CentCell, this%electronicSolver,&
               & iGeoStep, this%HSqrReal, this%SSqrReal, this%eigvecsReal, this%eigen, this%reks)
         end if
@@ -778,16 +783,16 @@ contains
             & this%tHelical, this%eigvecsReal, this%parallelKS, this%rhoPrim, this%SSqrReal,&
             & this%rhoSqrReal, this%q0, this%deltaRhoOutSqr, this%reks)
         call getMullikenPopulationL(env, this%denseDesc, this%neighbourList, this%nNeighbourSK,&
-            & this%img2CentCell, this%iSparseStart, this%orb, this%rhoPrim, this%over,&
+            & this%img2CentCell, this%iSparseStart, this%orb, this%rhoPrim, this%ints,&
             & this%iRhoPrim, this%qBlockOut, this%qiBlockOut, this%qNetAtom, this%reks)
 
         call getHamiltonianLandEnergyL(env, this%denseDesc, this%scc, this%tblite, this%orb, this%species,&
-            & this%neighbourList, this%nNeighbourSK, this%iSparseStart, this%img2CentCell, this%H0,&
-            & this%over, this%spinW, this%cellVol, this%extPressure, this%dftbEnergy(1), this%q0,&
+            & this%neighbourList, this%nNeighbourSK, this%iSparseStart, this%img2CentCell,&
+            & this%ints, this%spinW, this%cellVol, this%extPressure, this%dftbEnergy(1), this%q0,&
             & this%iAtInCentralRegion, this%solvation, this%thirdOrd, this%potential,&
             & this%rangeSep, this%nNeighbourLC, this%tDualSpinOrbit, this%xi, this %isExtField,&
             & this%isXlbomd, this%dftbU, this%dftbEnergy(1)%TS, this%qDepExtPot, this %qBlockOut,&
-            & this%qiBlockOut, this%tFixEf, this%Ef, this%rhoPrim, this%onSiteElements, this%iHam,&
+            & this%qiBlockOut, this%tFixEf, this%Ef, this%rhoPrim, this%onSiteElements, this%ints%iHamiltonian,&
             & this%dispersion, tConverged, this%species0, this%referenceN0, this%qNetAtom,&
             & this%reks)
         call optimizeFONsAndWeights(this%eigvecsReal, this%filling, this%dftbEnergy(1), this%reks)
@@ -806,10 +811,10 @@ contains
         if (this%isRangeSep) then
           call denseSubtractDensityOfAtoms(this%q0, this%denseDesc%iAtomStart, this%deltaRhoOutSqr)
         end if
-        call getMullikenPopulation(this%rhoPrim, this%over, this%orb, this%neighbourList,&
+        call getMullikenPopulation(this%rhoPrim, this%ints, this%orb, this%neighbourList,&
             & this%nNeighbourSK, this%img2CentCell, this%iSparseStart, this%qOutput,&
             & iRhoPrim=this%iRhoPrim, qBlock=this%qBlockOut, qiBlock=this%qiBlockOut,&
-            & qNetAtom=this%qNetAtom)
+            & qNetAtom=this%qNetAtom, dipAtom=this%dipAtom, quadAtom=this%quadAtom)
 
         ! Check charge convergece and guess new eigenvectors
         tStopScc = hasStopFile(fStopScc)
@@ -886,7 +891,8 @@ contains
 
           call addChargePotentials(env, this%scc, this%tblite, .true., this%qInput, this%q0,&
               & this%chargePerShell, this%orb, this%species, this%neighbourList, this%img2CentCell,&
-              & this%spinW, this%solvation, this%thirdOrd, this%potential, this%dispersion)
+              & this%spinW, this%solvation, this%thirdOrd, this%potential, this%dispersion, &
+              & this%dipAtom, this%quadAtom)
 
           call addBlockChargePotentials(this%qBlockIn, this%qiBlockIn, this%dftbU, this%tImHam,&
               & this%species, this%orb, this%potential)
@@ -911,30 +917,30 @@ contains
           call this%electronicSolver%elsi%updatePexsiDeltaVRanges(this%potential)
         end if
 
-        call getSccHamiltonian(this%H0, this%over, this%nNeighbourSK, this%neighbourList,&
+        call getSccHamiltonian(this%ints%hcore, this%ints, this%nNeighbourSK, this%neighbourList,&
             & this%species, this%orb, this%iSparseStart, this%img2CentCell, this%potential,&
-            & allocated(this%reks), this%ham, this%iHam)
+            & allocated(this%reks), this%ints%hamiltonian, this%ints%iHamiltonian)
 
         if (this%tWriteRealHS .or. this%tWriteHS&
             & .and. any(this%electronicSolver%iSolver&
             & == [electronicSolverTypes%qr, electronicSolverTypes%divideandconquer,&
             & electronicSolverTypes%relativelyrobust, electronicSolverTypes%magma_gvd])) then
-          call writeHSAndStop(env, this%tWriteHS, this%tWriteRealHS, this%tRealHS, this%over,&
+          call writeHSAndStop(env, this%tWriteHS, this%tWriteRealHS, this%tRealHS, this%ints%overlap,&
               & this%neighbourList, this%nNeighbourSK, this%denseDesc%iAtomStart,&
               & this%iSparseStart, this%img2CentCell, this%kPoint, this%iCellVec, this%cellVec,&
-              & this%ham, this%iHam)
+              & this%ints%hamiltonian, this%ints%iHamiltonian)
         end if
 
-        call convertToUpDownRepr(this%ham, this%iHam)
+        call convertToUpDownRepr(this%ints%hamiltonian, this%ints%iHamiltonian)
 
-        call getDensity(env, this%negfInt, iSccIter, this%denseDesc, this%ham, this%over,&
+        call getDensity(env, this%negfInt, iSccIter, this%denseDesc, this%ints%hamiltonian, this%ints%overlap,&
             & this%neighbourList, this%nNeighbourSk, this%iSparseStart, this%img2CentCell,&
             & this%iCellVec, this%cellVec, this%kPoint, this%kWeight, this%orb, this%tHelical,&
             & this%coord, this%species, this%electronicSolver, this%tRealHS, this%tSpinSharedEf,&
             & this%tSpinOrbit, this%tDualSpinOrbit, this%tFillKSep, this%tFixEf, this%tMulliken,&
             & this%iDistribFn, this%tempElec, this%nEl, this%parallelKS, this%Ef, this%mu,&
             & this%dftbEnergy(this%deltaDftb%iDeterminant), this%rangeSep, this%eigen,&
-            & this%filling, this%rhoPrim, this%iHam, this%xi, this%orbitalL, this%HSqrReal,&
+            & this%filling, this%rhoPrim, this%ints%iHamiltonian, this%xi, this%orbitalL, this%HSqrReal,&
             & this%SSqrReal, this%eigvecsReal, this%iRhoPrim, this%HSqrCplx, this%SSqrCplx,&
             & this%eigvecsCplx, this%rhoSqrReal, this%deltaRhoInSqr, this%deltaRhoOutSqr,&
             & this%qOutput, this%nNeighbourLC, this%tLargeDenseMatrices, this%deltaDftb)
@@ -960,10 +966,10 @@ contains
         end if
 
         if (this%tMulliken) then
-          call getMullikenPopulation(this%rhoPrim, this%over, this%orb, this%neighbourList,&
+          call getMullikenPopulation(this%rhoPrim, this%ints, this%orb, this%neighbourList,&
               & this%nNeighbourSk, this%img2CentCell, this%iSparseStart, this%qOutput,&
               & iRhoPrim=this%iRhoPrim, qBlock=this%qBlockOut, qiBlock=this%qiBlockOut,&
-              & qNetAtom=this%qNetAtom)
+              & qNetAtom=this%qNetAtom, dipAtom=this%dipAtom, quadAtom=this%quadAtom)
         end if
 
       #:if WITH_TRANSPORT
@@ -989,7 +995,7 @@ contains
           call addChargePotentials(env, this%scc, this%tblite, this%updateSccAfterDiag, this%qOutput,&
               & this%q0, this%chargePerShell, this%orb, this%species, this%neighbourList,&
               & this%img2CentCell, this%spinW, this%solvation, this%thirdOrd, this%potential,&
-              & this%dispersion)
+              & this%dispersion, this%dipAtom, this%quadAtom)
 
           call addBlockChargePotentials(this%qBlockOut, this%qiBlockOut, this%dftbU, this%tImHam,&
               & this%species, this%orb, this%potential)
@@ -1010,7 +1016,7 @@ contains
 
         call calcEnergies(this%scc, this%tblite, this%qOutput, this%q0, this%chargePerShell,&
             & this%species, this%isExtField, this%isXlbomd, this%dftbU, this%tDualSpinOrbit,&
-            & this%rhoPrim, this%H0, this%orb, this%neighbourList, this%nNeighbourSk,&
+            & this%rhoPrim, this%ints%hcore, this%orb, this%neighbourList, this%nNeighbourSk,&
             & this%img2CentCell, this%iSparseStart, this%cellVol, this%extPressure,&
             & this%dftbEnergy(this%deltaDftb%iDeterminant)%TS, this%potential,&
             & this%dftbEnergy(this%deltaDftb%iDeterminant), this%thirdOrd, this%solvation,&
@@ -1028,9 +1034,10 @@ contains
                 & this%maxSccIter, this%sccTol, tStopScc, this%tMixBlockCharges, this%tReadChrg,&
                 & this%qInput, this%qInpRed, sccErrorQ, tConverged, this%dftbU, this%qBlockOut,&
                 & this%iEqBlockDftbU, this%qBlockIn, this%qiBlockOut, this%iEqBlockDftbULS,&
-                & this%species0, this%qiBlockIn, this%iEqBlockOnSite, this%iEqBlockOnSiteLS)
+                & this%species0, this%qiBlockIn, this%iEqBlockOnSite, this%iEqBlockOnSiteLS,&
+                & this%mixDipoles, this%dipAtom, this%mixQuadrupoles, this%quadAtom)
           else
-            call getNextInputDensity(this%SSqrReal, this%over, this%neighbourList,&
+            call getNextInputDensity(this%SSqrReal, this%ints%overlap, this%neighbourList,&
                 & this%nNeighbourSK, this%denseDesc%iAtomStart, this%iSparseStart,&
                 & this%img2CentCell, this%pChrgMixer, this%qOutput, this%orb, this%tHelical,&
                 & this%species, this%coord, iGeoStep, iSccIter, this%minSccIter, this%maxSccIter,&
@@ -1168,7 +1175,7 @@ contains
     if (this%isLinResp) then
       if (.not. this%isRS_LinResp) then
         call calculateLinRespExcitations(env, this%linearResponse, this%parallelKS, this%scc,&
-            & this%qOutput, this%q0, this%over, this%eigvecsReal, this%eigen(:,1,:),&
+            & this%qOutput, this%q0, this%ints%overlap, this%eigvecsReal, this%eigen(:,1,:),&
             & this%filling(:,1,:), this%coord, this%species, this%speciesName, this%orb,&
             & this%skHamCont, this%skOverCont, autotestTag, this%taggedWriter, this%runId,&
             & this%neighbourList, this%nNeighbourSK, this%denseDesc, this%iSparseStart,&
@@ -1178,7 +1185,7 @@ contains
             & this%excitedDerivs, this%dQAtomEx, this%occNatural)
       else
         call calculateLinRespExcitations_RS(env, this%linearResponse, this%parallelKS,&
-            & this%scc, this%qOutput, this%q0, this%over, this%eigvecsReal, this%eigen(:,1,:),&
+            & this%scc, this%qOutput, this%q0, this%ints%overlap, this%eigvecsReal, this%eigen(:,1,:),&
             & this%filling(:,1,:), this%coord0, this%species, this%speciesName, this%orb,&
             & this%skHamCont, this%skOverCont, autotestTag, this%taggedWriter, this%runId,&
             & this%neighbourList, this%nNeighbourSK, this%denseDesc, this%iSparseStart,&
@@ -1190,7 +1197,7 @@ contains
     end if
 
     if (allocated(this%ppRPA)) then
-      call unpackHS(this%SSqrReal, this%over, this%neighbourList%iNeighbour, this%nNeighbourSK,&
+      call unpackHS(this%SSqrReal, this%ints%overlap, this%neighbourList%iNeighbour, this%nNeighbourSK,&
           & this%denseDesc%iAtomStart, this%iSparseStart, this%img2CentCell)
       call blockSymmetrizeHS(this%SSqrReal, this%denseDesc%iAtomStart)
       if (withMpi) then
@@ -1212,7 +1219,7 @@ contains
       call getDipoleMoment(this%qOutput, this%q0, this%coord,&
           & this%dipoleMoment(:,this%deltaDftb%iDeterminant), this%iAtInCentralRegion)
     #:block DEBUG_CODE
-      call checkDipoleViaHellmannFeynman(this%rhoPrim, this%q0, this%coord0, this%over, this%orb,&
+      call checkDipoleViaHellmannFeynman(this%rhoPrim, this%q0, this%coord0, this%ints%overlap, this%orb,&
           & this%neighbourList, this%nNeighbourSk, this%species, this%iSparseStart,&
           & this%img2CentCell, this%solvation)
     #:endblock DEBUG_CODE
@@ -1223,14 +1230,14 @@ contains
     if (this%tPrintEigVecs) then
       call writeEigenvectors(env, this%runId, this%neighbourList, this%nNeighbourSk, this%cellVec,&
           & this%iCellVec, this%denseDesc, this%iSparseStart, this%img2CentCell, this%species,&
-          & this%speciesName, this%orb, this%kPoint, this%over, this%parallelKS,&
+          & this%speciesName, this%orb, this%kPoint, this%ints%overlap, this%parallelKS,&
           & this%tPrintEigvecsTxt, this%eigvecsReal, this%SSqrReal, this%eigvecsCplx, this%SSqrCplx)
     end if
 
     if (this%tProjEigenvecs) then
       call writeProjectedEigenvectors(env, this%regionLabels, this%eigen, this%neighbourList,&
           & this%nNeighbourSk, this%cellVec, this%iCellVec, this%denseDesc, this%iSparseStart,&
-          & this%img2CentCell, this%orb, this%over, this%kPoint, this%kWeight, this%iOrbRegion,&
+          & this%img2CentCell, this%orb, this%ints%overlap, this%kPoint, this%kWeight, this%iOrbRegion,&
           & this%parallelKS, this%eigvecsReal, this%SSqrReal, this%eigvecsCplx, this%SSqrCplx)
     end if
     call env%globalTimer%stopTimer(globalTimers%eigvecWriting)
@@ -1253,11 +1260,11 @@ contains
             & this%neighbourList, this%nNeighbourSK, this%iSparseStart, this%img2CentCell,&
             & this%orb, this%nonSccDeriv, this%skHamCont, this%skOverCont, this%repulsive,&
             & this%coord, this%coord0, this%species, this%q0, this%eigvecsReal,&
-            & this%chrgForces, this%over, this%spinW, this%derivs, this%tWriteAutotest,&
+            & this%chrgForces, this%ints%overlap, this%spinW, this%derivs, this%tWriteAutotest,&
             & autotestTag, this%taggedWriter, this%reks)
         call getReksGradProperties(env, this%denseDesc, this%neighbourList, this%nNeighbourSK,&
             & this%iSparseStart, this%img2CentCell, this%eigvecsReal, this%orb,&
-            & this%iAtInCentralRegion, this%coord, this%coord0, this%over, this%rhoPrim,&
+            & this%iAtInCentralRegion, this%coord, this%coord0, this%ints%overlap, this%rhoPrim,&
             & this%qOutput, this%q0, this%tDipole, dipoleTmp, this%chrgForces, this%reks)
         call assignDipoleMoment(dipoleTmp, this%dipoleMoment, this%deltaDftb%iDeterminant,&
             & this%tDipole, this%reks, isSingleState=.false.)
@@ -1266,7 +1273,8 @@ contains
         call getEnergyWeightedDensity(env, this%negfInt, this%electronicSolver, this%denseDesc,&
             & this%forceType, this%filling, this%eigen, this%kPoint, this%kWeight,&
             & this%neighbourList, this%nNeighbourSK, this%orb, this%iSparseStart,&
-            & this%img2CentCell, this%iCellVec, this%cellVec, this%tRealHS, this%ham, this%over,&
+            & this%img2CentCell, this%iCellVec, this%cellVec, this%tRealHS,&
+            & this%ints%hamiltonian, this%ints%overlap,&
             & this%parallelKS, this%tHelical, this%species, this%coord, iSccIter, this%mu,&
             & this%ERhoPrim, this%eigvecsReal, this%SSqrReal, this%eigvecsCplx, this%SSqrCplx)
         call env%globalTimer%stopTimer(globalTimers%energyDensityMatrix)
@@ -1277,7 +1285,7 @@ contains
             & this%orb, this%potential, this%coord, this%derivs, this%groundDerivs,&
             & this%tripletderivs, this%mixedderivs, this%iRhoPrim, this%thirdOrd,&
             & this%solvation, this%qDepExtPot, this%chrgForces, this%dispersion,&
-            & this%rangeSep, this%SSqrReal, this%over, this%denseDesc, this%deltaRhoOutSqr,&
+            & this%rangeSep, this%SSqrReal, this%ints%overlap, this%denseDesc, this%deltaRhoOutSqr,&
             & this%halogenXCorrection, this%tHelical, this%coord0, this%deltaDftb)
 
         if (this%tCasidaForces) then
@@ -1657,8 +1665,8 @@ contains
   subroutine handleCoordinateChange(env, coord0, latVec, invLatVec, species0, cutOff,&
       & orb, tPeriodic, tHelical, sccCalc, tblite, repulsive, dispersion, solvation, thirdOrd,&
       & rangeSep, reks, img2CentCell, iCellVec, neighbourList, nAllAtom, coord0Fold, coord,&
-      & species, rCellVec, nNeighbourSK, nNeighbourLC, ham, over, H0, rhoPrim, iRhoPrim,&
-      & iHam, ERhoPrim, iSparseStart, cm5Cont, stat)
+      & species, rCellVec, nNeighbourSK, nNeighbourLC, ints, rhoPrim, iRhoPrim,&
+      & ERhoPrim, iSparseStart, cm5Cont, stat)
 
     !> Environment settings
     type(TEnvironment), intent(in) :: env
@@ -1742,23 +1750,14 @@ contains
     !> functional
     integer, intent(inout), allocatable :: nNeighbourLC(:)
 
-    !> Sparse hamiltonian storage
-    real(dp), allocatable, intent(inout) :: ham(:,:)
-
-    !> sparse overlap storage
-    real(dp), allocatable, intent(inout) :: over(:)
-
-    !> Non-SCC hamiltonian storage
-    real(dp), allocatable, intent(inout) :: h0(:)
+    !> Container for handling integrals
+    type(TIntegralCont), intent(inout) :: ints
 
     !> Sparse density matrix storage
     real(dp), allocatable, intent(inout) :: rhoPrim(:,:)
 
     !> Imaginary part of sparse density matrix storage
     real(dp), allocatable, intent(inout) :: iRhoPrim(:,:)
-
-    !> Imaginary part of sparse hamiltonian storage
-    real(dp), allocatable, intent(inout) :: iHam(:,:)
 
     !> energy weighted density matrix storage
     real(dp), allocatable, intent(inout) :: ERhoPrim(:)
@@ -1793,8 +1792,7 @@ contains
 
     call getSparseDescriptor(neighbourList%iNeighbour, nNeighbourSK, img2CentCell, orb,&
         & iSparseStart, sparseSize)
-    call reallocateSparseArrays(sparseSize, reks, ham, over, H0,&
-        & rhoPrim, iHam, iRhoPrim, ERhoPrim)
+    call reallocateSparseArrays(sparseSize, reks, ints, rhoPrim, iRhoPrim, ERhoPrim)
 
     if (allocated(nNeighbourLC)) then
       call getNrOfNeighboursForAll(nNeighbourLC, neighbourList, cutoff%lcCutOff)
@@ -1909,8 +1907,7 @@ contains
 
 
   !> Ensures that sparse array have enough storage to hold all necessary elements.
-  subroutine reallocateSparseArrays(sparseSize, reks, ham, over,&
-      & H0, rhoPrim, iHam, iRhoPrim, ERhoPrim)
+  subroutine reallocateSparseArrays(sparseSize, reks, ints, rhoPrim, iRhoPrim, ERhoPrim)
 
     !> Size of the sparse overlap
     integer, intent(in) :: sparseSize
@@ -1918,20 +1915,11 @@ contains
     !> data type for REKS
     type(TReksCalc), allocatable, intent(inout) :: reks
 
-    !> Sparse storage for hamiltonian (sparseSize,nSpin)
-    real(dp), allocatable, intent(inout) :: ham(:,:)
-
-    !> Sparse storage for overlap
-    real(dp), allocatable, intent(inout) :: over(:)
-
-    !> Sparse storage for non-SCC hamiltonian
-    real(dp), allocatable, intent(inout) :: H0(:)
+    !> Container for handling integrals
+    type(TIntegralCont), intent(inout) :: ints
 
     !> Sparse storage for density matrix
     real(dp), allocatable, intent(inout) :: rhoPrim(:,:)
-
-    !> Sparse storage for imaginary hamiltonian (not reallocated if not initially allocated)
-    real(dp), allocatable, intent(inout) :: iHam(:,:)
 
     !> Sparse storage for imaginary part of density matrix (not reallocated if not initially
     !> allocated)
@@ -1941,54 +1929,86 @@ contains
     !> allocated)
     real(dp), allocatable, intent(inout) :: ERhoPrim(:)
 
-    integer :: nSpin
+    integer :: nSpin, nDipole, nQuadrupole
 
     #:block DEBUG_CODE
-      @:ASSERT(size(H0) == size(over))
+      @:ASSERT(size(ints%hcore) == size(ints%overlap))
       if (.not. allocated(reks)) then
-        @:ASSERT(size(ham, dim=1) == size(over))
-        @:ASSERT(all(shape(rhoPrim) == shape(ham)))
+        @:ASSERT(size(ints%hamiltonian, dim=1) == size(ints%overlap))
+        @:ASSERT(all(shape(rhoPrim) == shape(ints%hamiltonian)))
         if (allocated(iRhoPrim)) then
           @:ASSERT(all(shape(iRhoPrim) == shape(rhoPrim)))
-          @:ASSERT(all(shape(iHam) == shape(ham)))
+          @:ASSERT(all(shape(ints%iHamiltonian) == shape(ints%hamiltonian)))
         end if
         if (allocated(ERhoPrim)) then
           @:ASSERT(size(ERhoPrim) == size(rhoPrim, dim=1))
         end if
       end if
+      @:ASSERT(allocated(ints%dipoleBra) .eqv. allocated(ints%dipoleKet))
+      @:ASSERT(allocated(ints%quadrupoleBra) .eqv. allocated(ints%quadrupoleKet))
+      if (allocated(ints%dipoleBra)) then
+        @:ASSERT(all(shape(ints%dipoleBra) == shape(ints%dipoleKet)))
+        @:ASSERT(size(ints%dipoleBra, dim=2) == size(ints%overlap))
+      end if
+      if (allocated(ints%quadrupoleBra)) then
+        @:ASSERT(all(shape(ints%quadrupoleBra) == shape(ints%quadrupoleKet)))
+        @:ASSERT(size(ints%quadrupoleBra, dim=2) == size(ints%overlap))
+      end if
     #:endblock DEBUG_CODE
 
     if (allocated(reks)) then
-      if (size(over, dim=1) == sparseSize) then
+      if (size(ints%overlap, dim=1) == sparseSize) then
         ! When the size of sparse matrices are different,
         ! phase of MOs can affect gradient of REKS
         return
       end if
     else
-      if (size(ham, dim=1) >= sparseSize) then
+      if (size(ints%hamiltonian, dim=1) >= sparseSize) then
         ! Sparse matrices are big enough
         return
       end if
     end if
 
     nSpin = size(rhoPrim, dim=2)
-    if (.not. allocated(reks)) then
-      deallocate(ham)
+    if (allocated(ints%dipoleBra)) then
+      nDipole = size(ints%dipoleBra, dim=1)
+      deallocate(ints%dipoleBra)
+      deallocate(ints%dipoleKet)
+    else
+      nDipole = 0
     end if
-    deallocate(over)
-    deallocate(H0)
+    if (allocated(ints%quadrupoleBra)) then
+      nQuadrupole = size(ints%quadrupoleBra, dim=1)
+      deallocate(ints%quadrupoleBra)
+      deallocate(ints%quadrupoleKet)
+    else
+      nQuadrupole = 0
+    end if
+    if (.not. allocated(reks)) then
+      deallocate(ints%hamiltonian)
+    end if
+    deallocate(ints%overlap)
+    deallocate(ints%hcore)
     deallocate(rhoPrim)
     if (.not. allocated(reks)) then
-      allocate(ham(sparseSize, nSpin))
+      allocate(ints%hamiltonian(sparseSize, nSpin))
     end if
-    allocate(over(sparseSize))
-    allocate(H0(sparseSize))
+    allocate(ints%overlap(sparseSize))
+    allocate(ints%hcore(sparseSize))
     allocate(rhoPrim(sparseSize, nSpin))
     if (allocated(iRhoPrim)) then
       deallocate(iRhoPrim)
-      deallocate(iHam)
+      deallocate(ints%iHamiltonian)
       allocate(iRhoPrim(sparseSize, nSpin))
-      allocate(iHam(sparseSize, nSpin))
+      allocate(ints%iHamiltonian(sparseSize, nSpin))
+    end if
+    if (nDipole > 0) then
+      allocate(ints%dipoleBra(nDipole, sparseSize))
+      allocate(ints%dipoleKet(nDipole, sparseSize))
+    end if
+    if (nQuadrupole > 0) then
+      allocate(ints%quadrupoleBra(nQuadrupole, sparseSize))
+      allocate(ints%quadrupoleKet(nQuadrupole, sparseSize))
     end if
     if (allocated(ERhoPrim)) then
       deallocate(ERhoPrim)
@@ -3436,14 +3456,14 @@ contains
 
 
   !> Calculate Mulliken population from sparse density matrix.
-  subroutine getMullikenPopulation(rhoPrim, over, orb, neighbourList, nNeighbourSK, img2CentCell,&
-      & iSparseStart, qOrb, iRhoPrim, qBlock, qiBlock, qNetAtom)
+  subroutine getMullikenPopulation(rhoPrim, ints, orb, neighbourList, nNeighbourSK, img2CentCell,&
+      & iSparseStart, qOrb, iRhoPrim, qBlock, qiBlock, qNetAtom, dipAtom, quadAtom)
 
     !> sparse density matrix
     real(dp), intent(in) :: rhoPrim(:,:)
 
-    !> sparse overlap matrix
-    real(dp), intent(in) :: over(:)
+    !> Container for handling integrals
+    type(TIntegralCont), intent(inout) :: ints
 
     !> Atomic orbital information
     type(TOrbitals), intent(in) :: orb
@@ -3475,32 +3495,50 @@ contains
     !> Onsite Mulliken charges per atom
     real(dp), intent(inout), allocatable :: qNetAtom(:)
 
+    !> Cumulative atomic dipole moments
+    real(dp), intent(inout), optional :: dipAtom(:, :)
+
+    !> Cumulative atomic quadrupole moments
+    real(dp), intent(inout), optional :: quadAtom(:, :)
+
     integer :: iSpin
 
     qOrb(:,:,:) = 0.0_dp
     do iSpin = 1, size(rhoPrim, dim=2)
-      call mulliken(qOrb(:,:,iSpin), over, rhoPrim(:,iSpin), orb, neighbourList%iNeighbour,&
-          & nNeighbourSK, img2CentCell, iSparseStart)
+      call mulliken(qOrb(:,:,iSpin), ints%overlap, rhoPrim(:,iSpin), orb,&
+          & neighbourList%iNeighbour, nNeighbourSK, img2CentCell, iSparseStart)
     end do
 
     if (allocated(qBlock)) then
       qBlock(:,:,:,:) = 0.0_dp
-      do iSpin = 1, size(rhoPrim, dim=2)
-        call mulliken(qBlock(:,:,:,iSpin), over, rhoPrim(:,iSpin), orb, neighbourList%iNeighbour,&
-            & nNeighbourSK, img2CentCell, iSparseStart)
+        do iSpin = 1, size(rhoPrim, dim=2)
+        call mulliken(qBlock(:,:,:,iSpin), ints%overlap, rhoPrim(:,iSpin), orb,&
+            & neighbourList%iNeighbour, nNeighbourSK, img2CentCell, iSparseStart)
       end do
     end if
 
     if (allocated(qiBlock)) then
       qiBlock(:,:,:,:) = 0.0_dp
       do iSpin = 1, size(iRhoPrim, dim=2)
-        call skewMulliken(qiBlock(:,:,:,iSpin), over, iRhoPrim(:,iSpin), orb,&
+        call skewMulliken(qiBlock(:,:,:,iSpin), ints%overlap, iRhoPrim(:,iSpin), orb,&
             & neighbourList%iNeighbour, nNeighbourSK, img2CentCell, iSparseStart)
       end do
     end if
 
     if (allocated(qNetAtom)) then
       call getOnsitePopulation(rhoPrim(:,1), orb, iSparseStart, qNetAtom)
+    end if
+
+    if (present(dipAtom)) then
+      call getAtomicMultipolePopulation(dipAtom, ints%dipoleBra, ints%dipoleKet,&
+          & rhoPrim(:,iSpin), orb, neighbourList%iNeighbour, nNeighbourSK, img2CentCell,&
+          & iSparseStart)
+    end if
+
+    if (present(quadAtom)) then
+      call getAtomicMultipolePopulation(quadAtom, ints%quadrupoleBra, ints%quadrupoleKet,&
+          & rhoPrim(:,iSpin), orb, neighbourList%iNeighbour, nNeighbourSK, img2CentCell,&
+          & iSparseStart)
     end if
 
   end subroutine getMullikenPopulation
@@ -3527,7 +3565,8 @@ contains
   subroutine getNextInputCharges(env, pChrgMixer, qOutput, qOutRed, orb, nIneqOrb, iEqOrbitals,&
       & iGeoStep, iSccIter, minSccIter, maxSccIter, sccTol, tStopScc, tMixBlockCharges, tReadChrg,&
       & qInput, qInpRed, sccErrorQ, tConverged, dftbU, qBlockOut, iEqBlockDftbU, qBlockIn,&
-      & qiBlockOut, iEqBlockDftbuLS, species0, qiBlockIn, iEqBlockOnSite, iEqBlockOnSiteLS)
+      & qiBlockOut, iEqBlockDftbuLS, species0, qiBlockIn, iEqBlockOnSite, iEqBlockOnSiteLS,&
+      & mixDipoles, dipAtom, mixQuadrupoles, quadAtom)
 
     !> Environment settings
     type(TEnvironment), intent(in) :: env
@@ -3616,13 +3655,26 @@ contains
     !> Equivalences for onsite block corrections if needed for imaginary elements
     integer, intent(in), allocatable :: iEqBlockOnSiteLS(:,:,:,:)
 
+    !> Mix dipole moments
+    logical, intent(in) :: mixDipoles
+
+    !> Cumulative atomic dipole moments
+    real(dp), intent(inout), optional :: dipAtom(:, :)
+
+    !> Mix quadrupoles moments
+    logical, intent(in) :: mixQuadrupoles
+
+    !> Cumulative atomic quadrupole moments
+    real(dp), intent(inout), optional :: quadAtom(:, :)
+
     real(dp), allocatable :: qDiffRed(:)
     integer :: nSpin
 
     nSpin = size(qOutput, dim=3)
 
     call reduceCharges(orb, nIneqOrb, iEqOrbitals, qOutput, qOutRed, qBlockOut, dftbU,&
-        & iEqBlockDftbu, qiBlockOut, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS)
+        & iEqBlockDftbu, qiBlockOut, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS,&
+        & mixDipoles, dipAtom, mixQuadrupoles, quadAtom)
     qDiffRed = qOutRed - qInpRed
     sccErrorQ = maxval(abs(qDiffRed))
     tConverged = (sccErrorQ < sccTol)&
@@ -3649,7 +3701,8 @@ contains
         qInpRed(:) = qInpRed / env%mpi%globalComm%size
       #:endif
         call expandCharges(qInpRed, orb, nIneqOrb, iEqOrbitals, qInput, dftbU, qBlockIn,&
-            & iEqBlockDftbu, species0, qiBlockIn, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS)
+            & iEqBlockDftbu, species0, qiBlockIn, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS, &
+            & mixDipoles, dipAtom, mixQuadrupoles, quadAtom)
       end if
     end if
 
@@ -3811,7 +3864,8 @@ contains
 
   !> Reduce charges according to orbital equivalency rules.
   subroutine reduceCharges(orb, nIneqOrb, iEqOrbitals, qOrb, qRed, qBlock, dftbU, iEqBlockDftbu,&
-      & qiBlock, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS)
+      & qiBlock, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS, &
+      & mixDipoles, dipAtom, mixQuadrupoles, quadAtom)
 
     !> Atomic orbital information
     type(TOrbitals), intent(in) :: orb
@@ -3849,12 +3903,36 @@ contains
     !> Equivalences for onsite block corrections if needed for imaginary part
     integer, intent(in), allocatable :: iEqBlockOnSiteLS(:,:,:,:)
 
+    !> Mix dipole moments
+    logical, intent(in) :: mixDipoles
+
+    !> Cumulative atomic dipole moments
+    real(dp), intent(inout), optional :: dipAtom(:, :)
+
+    !> Mix quadrupoles moments
+    logical, intent(in) :: mixQuadrupoles
+
+    !> Cumulative atomic quadrupole moments
+    real(dp), intent(inout), optional :: quadAtom(:, :)
+
     real(dp), allocatable :: qOrbUpDown(:,:,:), qBlockUpDown(:,:,:,:)
+    integer :: nMix
 
     qRed(:) = 0.0_dp
     qOrbUpDown = qOrb
     call qm2ud(qOrbUpDown)
     call orbitalEquiv_reduce(qOrbUpDown, iEqOrbitals, orb, qRed(1:nIneqOrb))
+    nMix = nIneqOrb
+    if (mixDipoles) then
+      @:ASSERT(present(dipAtom))
+      qRed(nMix+1:nMix+size(dipAtom)) = reshape(dipAtom, [size(dipAtom)])
+      nMix = nMix + size(dipAtom)
+    end if
+    if (mixQuadrupoles) then
+      @:ASSERT(present(quadAtom))
+      qRed(nMix+1:nMix+size(quadAtom)) = reshape(quadAtom, [size(quadAtom)])
+      nMix = nMix + size(quadAtom)
+    end if
     if (allocated(qBlock)) then
       qBlockUpDown = qBlock
       call qm2ud(qBlockUpDown)
@@ -3878,7 +3956,8 @@ contains
 
   !> Expand reduced charges according orbital equivalency rules.
   subroutine expandCharges(qRed, orb, nIneqOrb, iEqOrbitals, qOrb, dftbU, qBlock, iEqBlockDftbu,&
-      & species0, qiBlock, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS)
+      & species0, qiBlock, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS, &
+      & mixDipoles, dipAtom, mixQuadrupoles, quadAtom)
 
     !> Reduction of atomic populations
     real(dp), intent(in) :: qRed(:)
@@ -3919,7 +3998,19 @@ contains
     !> Equivalences for onsite block corrections if needed for imaginary part
     integer, intent(in), allocatable :: iEqBlockOnSiteLS(:,:,:,:)
 
-    integer :: nSpin
+    !> Mix dipole moments
+    logical, intent(in) :: mixDipoles
+
+    !> Cumulative atomic dipole moments
+    real(dp), intent(inout), optional :: dipAtom(:, :)
+
+    !> Mix quadrupoles moments
+    logical, intent(in) :: mixQuadrupoles
+
+    !> Cumulative atomic quadrupole moments
+    real(dp), intent(inout), optional :: quadAtom(:, :)
+
+    integer :: nSpin, nMix
 
     @:ASSERT(allocated(qBlock) .eqv. (allocated(iEqBlockDftbU) .or. allocated(iEqBlockOnSite)))
     @:ASSERT(.not. allocated(qBlock) .or. allocated(species0))
@@ -3928,6 +4019,17 @@ contains
 
     nSpin = size(qOrb, dim=3)
     call OrbitalEquiv_expand(qRed(1:nIneqOrb), iEqOrbitals, orb, qOrb)
+    nMix = nIneqOrb
+    if (mixDipoles) then
+      @:ASSERT(present(dipAtom))
+      dipAtom(:,:) = reshape(qRed(nMix+1:nMix+size(dipAtom)), shape(dipAtom))
+      nMix = nMix + size(dipAtom)
+    end if
+    if (mixQuadrupoles) then
+      @:ASSERT(present(quadAtom))
+      quadAtom(:,:) = reshape(qRed(nMix+1:nMix+size(quadAtom)), shape(quadAtom))
+      nMix = nMix + size(quadAtom)
+    end if
     if (allocated(qBlock)) then
       qBlock(:,:,:,:) = 0.0_dp
       if (allocated(iEqBlockOnSite)) then
@@ -4476,7 +4578,8 @@ contains
     end if
     call xlbomdIntegrator%getNextCharges(qOutRed(1:nIneqOrb), qInpRed(1:nIneqOrb))
     call expandCharges(qInpRed, orb, nIneqOrb, iEqOrbitals, qInput, dftbU, qBlockIn, iEqBlockDftbu,&
-        & species0, qiBlockIn, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS)
+        & species0, qiBlockIn, iEqBlockDftbuLS, iEqBlockOnSite, iEqBlockOnSiteLS, &
+        & mixDipoles=.false., mixQuadrupoles=.false.)
 
   end subroutine getXlbomdCharges
 
@@ -4567,7 +4670,7 @@ contains
       potentialDerivative(:,1) = -coord0(ii,:)
       hprime(:,:) = 0.0_dp
       dipole(:,:) = 0.0_dp
-      call add_shift(hprime, over, nNeighbourSK, neighbourList%iNeighbour, species, orb,&
+      call addShift(hprime, over, nNeighbourSK, neighbourList%iNeighbour, species, orb,&
           & iSparseStart, nAtom, img2CentCell, potentialDerivative)
 
       ! evaluate <psi| dH/dE | psi> = Tr_part rho dH/dE
@@ -6832,7 +6935,7 @@ contains
 
   !> Calculate Mulliken population for each microstate from sparse density matrix.
   subroutine getMullikenPopulationL(env, denseDesc, neighbourList, nNeighbourSK, &
-      & img2CentCell, iSparseStart, orb, rhoPrim, over, iRhoPrim, qBlock, &
+      & img2CentCell, iSparseStart, orb, rhoPrim, ints, iRhoPrim, qBlock, &
       & qiBlock, qNetAtom, reks)
 
     !> Environment settings
@@ -6859,8 +6962,8 @@ contains
     !> sparse density matrix
     real(dp), intent(inout) :: rhoPrim(:,:)
 
-    !> sparse overlap matrix
-    real(dp), intent(in) :: over(:)
+    !> Container for handling integrals
+    type(TIntegralCont), intent(inout) :: ints
 
     !> imaginary part of density matrix
     real(dp), intent(in), allocatable :: iRhoPrim(:,:)
@@ -6893,7 +6996,7 @@ contains
 
       ! reks%qOutputL & reks%qNetAtomL has (my_qm) component
       reks%qOutputL(:,:,:,iL) = 0.0_dp
-      call getMullikenPopulation(rhoPrim, over, orb, neighbourList, nNeighbourSK, &
+      call getMullikenPopulation(rhoPrim, ints, orb, neighbourList, nNeighbourSK, &
           & img2CentCell, iSparseStart, reks%qOutputL(:,:,:,iL), iRhoPrim=iRhoPrim, &
           & qBlock=qBlock, qiBlock=qiBlock, qNetAtom=qNetAtom)
 
@@ -6923,7 +7026,7 @@ contains
   !> Build L, spin dependent Hamiltonian with various contributions
   !> and compute the energy of microstates
   subroutine getHamiltonianLandEnergyL(env, denseDesc, sccCalc, tblite, orb, species, neighbourList, &
-      & nNeighbourSK, iSparseStart, img2CentCell, H0, over, spinW, cellVol, extPressure, &
+      & nNeighbourSK, iSparseStart, img2CentCell, ints, spinW, cellVol, extPressure, &
       & energy, q0, iAtInCentralRegion, solvation, thirdOrd, potential, rangeSep, nNeighbourLC,&
       & tDualSpinOrbit, xi, isExtField, isXlbomd, dftbU, TS, qDepExtPot, qBlock, qiBlock,&
       & tFixEf, Ef, rhoPrim, onSiteElements, iHam, dispersion, tConverged, species0,&
@@ -6959,11 +7062,8 @@ contains
     !> map from image atom to real atoms
     integer, intent(in) :: img2CentCell(:)
 
-    !> non-SCC hamiltonian (sparse)
-    real(dp), intent(in) :: H0(:)
-
-    !> sparse overlap matrix
-    real(dp), intent(in) :: over(:)
+    !> Container for handling integrals
+    type(TIntegralCont), intent(inout) :: ints
 
     !> spin constants
     real(dp), allocatable, intent(in) :: spinW(:,:,:)
@@ -7065,7 +7165,7 @@ contains
     integer, pointer :: pSpecies0(:)
     integer :: sparseSize, nAtom, nSpin, iL, tmpL, rsL
 
-    sparseSize = size(over,dim=1)
+    sparseSize = size(ints%overlap,dim=1)
     nAtom = size(reks%qOutputL,dim=2)
     nSpin = size(reks%qOutputL,dim=3)
     pSpecies0 => species(1:nAtom)
@@ -7097,13 +7197,13 @@ contains
         ! If iL = 1, then qm = 1u + 1d, 1u - 1d and my_qm = 1u + 1d
         ! calculate charge part
         potential%intBlock(:,:,:,1) = reks%intBlockL(:,:,:,1,iL)
-        tmpHamSp(:,1) = h0
+        tmpHamSp(:,1) = ints%hcore
       else
         if (mod(iL,2) == 1) then
           ! If iL = 3, then qm = 3u + 3d, 3u - 3d and my_qm = 3u + 3d
           ! calculate charge part
           potential%intBlock(:,:,:,1) = reks%intBlockL(:,:,:,1,iL)
-          tmpHamSp(:,1) = h0
+          tmpHamSp(:,1) = ints%hcore
         else
           ! If iL = 4, then qm = 4u + 4d, 4u - 4d and my_qm = 3u - 3d (= -(4u - 4d))
           ! calculate magnetization part
@@ -7113,7 +7213,7 @@ contains
       end if
 
       ! tmpHamSp has (my_qm) component
-      call getSccHamiltonian(H0, over, nNeighbourSK, neighbourList, species, orb,&
+      call getSccHamiltonian(ints%hcore, ints, nNeighbourSK, neighbourList, species, orb,&
           & iSparseStart, img2CentCell, potential, allocated(reks), tmpHamSp, iHam)
       tmpHamSp(:,1) = 2.0_dp * tmpHamSp(:,1)
 
@@ -7142,7 +7242,7 @@ contains
       tmpEn(:) = 0.0_dp
       do iL = 1, reks%Lmax
         ! Add rangeseparated contribution
-        call rangeSep%addLRHamiltonian(env, reks%deltaRhoSqrL(:,:,1,iL), over, &
+        call rangeSep%addLRHamiltonian(env, reks%deltaRhoSqrL(:,:,1,iL), ints%overlap, &
             & neighbourList%iNeighbour, nNeighbourLC, denseDesc%iAtomStart, &
             & iSparseStart, orb, reks%hamSqrL(:,:,1,iL), reks%overSqr)
         ! Calculate the long-range exchange energy for up spin
@@ -7195,7 +7295,7 @@ contains
       end if
 
       call calcEnergies(sccCalc, tblite, reks%qOutputL(:,:,:,iL), q0, reks%chargePerShellL(:,:,:,iL),&
-          & species, isExtField, isXlbomd, dftbU, tDualSpinOrbit, rhoPrim, H0, orb,&
+          & species, isExtField, isXlbomd, dftbU, tDualSpinOrbit, rhoPrim, ints%hcore, orb,&
           & neighbourList, nNeighbourSk, img2CentCell, iSparseStart, cellVol, extPressure, TS,&
           & potential, energy, thirdOrd, solvation, rangeSep, reks, qDepExtPot, qBlock, qiBlock,&
           & xi, iAtInCentralRegion, tFixEf, Ef, onSiteElements)

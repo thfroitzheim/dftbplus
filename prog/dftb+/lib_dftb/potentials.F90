@@ -68,6 +68,12 @@ module dftbp_potentials
     !> populations)
     real(dp), allocatable :: extOnSiteAtom(:,:)
 
+    !> Dipolar potential for each atom
+    real(dp), allocatable :: dipoleAtom(:,:,:)
+
+    !> Quadrupolar potential for each atom
+    real(dp), allocatable :: quadrupoleAtom(:,:,:)
+
   end type TPotentials
 
 
@@ -124,6 +130,8 @@ contains
     allocate(this%extGrad(3, nAtom))
     allocate(this%orbitalBlock(orb%mOrb,orb%mOrb,nAtom,nSpin))
     allocate(this%iorbitalBlock(orb%mOrb,orb%mOrb,nAtom,nSpin))
+    allocate(this%dipoleAtom(3,nAtom,nSpin))
+    allocate(this%quadrupoleAtom(6,nAtom,nSpin))
     this%intAtom = 0.0_dp
     this%intShell = 0.0_dp
     this%intBlock = 0.0_dp
@@ -133,6 +141,8 @@ contains
     this%extGrad(:,:) = 0.0_dp
     this%orbitalBlock = 0.0_dp
     this%iorbitalBlock = 0.0_dp
+    this%dipoleAtom(:,:,:) = 0.0_dp
+    this%quadrupoleAtom(:,:,:) = 0.0_dp
 
     if (present(extAtPotentials)) then
 

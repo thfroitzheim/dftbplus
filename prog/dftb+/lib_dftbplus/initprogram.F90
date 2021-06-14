@@ -71,6 +71,7 @@ module dftbp_initprogram
   use dftbp_coulomb, only : TCoulombInput
   use dftbp_onsitecorrection, only : Ons_getOrbitalEquiv, Ons_blockIndx
   use dftbp_hamiltonian, only : TRefExtPot
+  use dftbp_integrals, only : TIntegralCont, TIntegralCont_init
   use dftbp_h5correction, only : TH5CorrectionInput
   use dftbp_halogenx, only : THalogenX, THalogenX_init
   use dftbp_slakocont, only : TSlakoCont, getCutOff
@@ -335,20 +336,14 @@ module dftbp_initprogram
     !> Cut off distances for various types of interaction
     type(TCutoffs) :: cutOff
 
-    !> Sparse hamiltonian matrix
-    real(dp), allocatable :: ham(:,:)
-
-    !> imaginary part of the Hamiltonian
-    real(dp), allocatable :: iHam(:,:)
+    !> Container for Hamiltonian and overlap related integrals
+    type(TIntegralCont) :: ints
 
     !> Charge per atomic shell (shell, atom, spin channel)
     real(dp), allocatable :: chargePerShell(:,:,:)
 
     !> Charge par atom (atom, spin channel)
     real(dp), allocatable :: chargePerAtom(:,:)
-
-    !> sparse overlap
-    real(dp), allocatable :: over(:)
 
 
     !> nr. of K-points
@@ -484,6 +479,18 @@ module dftbp_initprogram
 
     !> Do need net atomic charges?
     logical :: tNetAtomCharges
+
+    !> Cumulative atomic dipole moments requested
+    logical :: requireAtomDipoles
+
+    !> Cumulative atomic quadrupole moments requested
+    logical :: requireAtomQuadrupoles
+
+    !> Cumulative atomic dipole moments requested
+    logical :: mixDipoles
+
+    !> Cumulative atomic quadrupole moments requested
+    logical :: mixQuadrupoles
 
     !> Should the net charges be printed
     logical :: tPrintNetAtomCharges
@@ -633,6 +640,12 @@ module dftbp_initprogram
 
     !> Imaginary part of output Mulliken block charges
     real(dp), allocatable :: qiBlockOut(:, :, :, :)
+
+    !> Cumulative atomic dipole moments
+    real(dp), allocatable :: dipAtom(:, :)
+
+    !> Cumulative atomic quadrupole moments
+    real(dp), allocatable :: quadAtom(:, :)
 
     !> input charges packed into unique equivalence elements
     real(dp), allocatable :: qInpRed(:)
@@ -847,9 +860,6 @@ module dftbp_initprogram
 
     !> Energy weighted density matrix
     real(dp), allocatable :: ERhoPrim(:)
-
-    !> Non-SCC part of the hamiltonian in sparse storage
-    real(dp), allocatable :: h0(:)
 
     !> electronic filling
     real(dp), allocatable :: filling(:,:,:)
@@ -1650,12 +1660,18 @@ contains
       allocate(this%chargePerShell(0,0,0))
     end if
     if (.not.allocated(this%reks)) then
-      allocate(this%ham(0, this%nSpin))
+      allocate(this%ints%hamiltonian(0, this%nSpin))
     end if
     if (this%tImHam) then
-      allocate(this%iHam(0, this%nSpin))
+      allocate(this%ints%iHamiltonian(0, this%nSpin))
     end if
-    allocate(this%over(0))
+    allocate(this%ints%overlap(0))
+    if (allocated(this%tblite)) then
+      allocate(this%ints%dipoleBra(3, 0))
+      allocate(this%ints%dipoleKet(3, 0))
+      allocate(this%ints%quadrupoleBra(6, 0))
+      allocate(this%ints%quadrupoleKet(6, 0))
+    end if
     allocate(this%iSparseStart(0, this%nAtom))
 
     this%tempAtom = input%ctrl%tempAtom
@@ -2155,6 +2171,9 @@ contains
     else
       this%tDipole = .false.
     end if
+
+    this%requireAtomDipoles = allocated(this%tblite)
+    this%requireAtomQuadrupoles = allocated(this%tblite)
 
     if (this%tMulliken) then
       this%tPrintNetAtomCharges = input%ctrl%tPrintNetAtomCharges
@@ -3590,6 +3609,9 @@ contains
     !> Orbital equivalency for orbital potentials
     integer, allocatable :: iEqOrbDFTBU(:,:,:)
 
+    this%mixDipoles = .false.
+    this%mixQuadrupoles = .false.
+
     if (this%tSccCalc) then
       if(.not. allocated(this%iEqOrbitals)) then
         allocate(this%iEqOrbitals(this%orb%mOrb, this%nAtom, this%nSpin))
@@ -3625,11 +3647,13 @@ contains
         iEqOrbSpin(:,:,:) = 0
         allocate(iEqOrbDFTBU(this%orb%mOrb, this%nAtom, this%nSpin))
         iEqOrbDFTBU(:,:,:) = 0
-        call this%tblite%getOrbitalEquiv(iEqOrbDFTBU, this%orb, this%species0)
+        call this%tblite%getOrbitalEquiv(iEqOrbDFTBU, this%mixDipoles, this%mixQuadrupoles, &
+            & this%orb, this%species0)
         call OrbitalEquiv_merge(this%iEqOrbitals, iEqOrbDFTBU, this%orb, iEqOrbSpin)
         this%iEqOrbitals(:,:,:) = iEqOrbSpin(:,:,:)
         this%nIneqOrb = maxval(this%iEqOrbitals)
-        this%nMixElements = this%nIneqOrb
+        this%nMixElements = this%nIneqOrb + merge(3*this%nAtom, 0, this%mixDipoles) &
+          & + merge(6*this%nAtom, 0, this%mixQuadrupoles)
         deallocate(iEqOrbSpin)
         deallocate(iEqOrbDFTBU)
       end if
@@ -3812,6 +3836,16 @@ contains
         end if
         ${NAME}$(:) = 0.0_dp
       #:endfor
+    end if
+
+    if (this%requireAtomDipoles) then
+      allocate(this%dipAtom(3, this%nAtom))
+      this%dipAtom(:,:) = 0.0_dp
+    end if
+
+    if (this%requireAtomQuadrupoles) then
+      allocate(this%quadAtom(6, this%nAtom))
+      this%quadAtom(:,:) = 0.0_dp
     end if
 
 
@@ -4424,7 +4458,7 @@ contains
     else
       allocate(this%rhoPrim(0, this%nSpin))
     end if
-    allocate(this%h0(0))
+    allocate(this%ints%hcore(0))
     if (this%tImHam) then
       allocate(this%iRhoPrim(0, this%nSpin))
     end if

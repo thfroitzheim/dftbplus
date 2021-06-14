@@ -23,7 +23,7 @@ module dftbp_staticperturb
   use dftbp_dftbplusu, only : TDftbU, TDftbU_init, plusUFunctionals
   use dftbp_rangeseparated, only : TRangeSepFunc
   use dftbp_onsitecorrection, only : addOnsShift, onsblock_expand
-  use dftbp_shift, only : add_shift, total_shift
+  use dftbp_shift, only : addShift, totalShift
   use dftbp_mixer, only : TMixer, mix, reset
   use dftbp_fermihelper, only : theta, deltamn, invDiff
   use dftbp_environment, only : TEnvironment
@@ -399,8 +399,8 @@ contains
       do iAt = 1, nAtom
         dPotential%extAtom(iAt,1) = coord(iCart,iAt)
       end do
-      call total_shift(dPotential%extShell, dPotential%extAtom, orb, species)
-      call total_shift(dPotential%extBlock, dPotential%extShell, orb, species)
+      call totalShift(dPotential%extShell, dPotential%extAtom, orb, species)
+      call totalShift(dPotential%extBlock, dPotential%extShell, orb, species)
 
       if (allocated(dEfdETmp)) then
         dEfdETmp(:) = 0.0_dp
@@ -726,15 +726,15 @@ contains
 
         end if
 
-        call total_shift(dPotential%intShell,dPotential%intAtom, orb, species)
-        call total_shift(dPotential%intBlock,dPotential%intShell, orb, species)
+        call totalShift(dPotential%intShell,dPotential%intAtom, orb, species)
+        call totalShift(dPotential%intBlock,dPotential%intShell, orb, species)
         if (allocated(dftbU) .or. allocated(onsMEs)) then
           dPotential%intBlock(:,:,:,:) = dPotential%intBlock + dPotential%orbitalBlock
         end if
         dPotential%intBlock(:,:,:,:) = dPotential%intBlock + dPotential%extBlock
 
         dHam(:,:) = 0.0_dp
-        call add_shift(dHam, over, nNeighbourSK, neighbourList%iNeighbour, species, orb,&
+        call addShift(dHam, over, nNeighbourSK, neighbourList%iNeighbour, species, orb,&
             & iSparseStart, nAtom, img2CentCell, dPotential%intBlock)
 
         if (nSpin > 1) then
