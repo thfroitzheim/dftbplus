@@ -1814,7 +1814,7 @@ contains
       case("IPEA1-xTB")
         method = tbliteMethod%ipea1xtb
       end select
-      call ctrl%tbliteInp%setupCalculator(method)
+      ctrl%tbliteInp%spec%method = method
       ctrl%tbliteInp%info%name = trim(unquote(char(buffer)))
     else
       call getChildValue(node, "ParameterFile", value1, "", child=child, &
@@ -1826,11 +1826,15 @@ contains
         call findFile(searchPath, paramFile, paramTmp)
         if (allocated(paramTmp)) call move_alloc(paramTmp, paramFile)
         write(stdOut, '(a)') "Using parameter file '"//paramFile//"' for xTB Hamiltonian"
-        call ctrl%tbliteInp%setupCalculator(paramFile)
+        ctrl%tbliteInp%spec%paramFile = paramFile
+        ctrl%tbliteInp%info%name = trim(unquote(char(buffer)))
       else
         call detailedError(node, "Either a Method or ParameterFile must be specified for xTB")
       end if
     end if
+    call ctrl%tbliteInp%setupCalculator
+
+    call getChildValue(node, "Lambda", ctrl%tbliteInp%lambda, 1.0_dp, child=child)
 
     call getChildValue(node, "ShellResolvedSCC", ctrl%tShellResolved, .true.)
 
@@ -5147,6 +5151,7 @@ contains
       select case(ctrl%hamiltonian)
       case(hamiltonianTypes%xtb)
         call readFilling(hamNode, ctrl, geo, 300.0_dp*Boltzmann)
+        ctrl%tbliteInp%elecTemp = ctrl%tempElec
       case(hamiltonianTypes%dftb)
         call readFilling(hamNode, ctrl, geo, 0.0_dp)
       end select

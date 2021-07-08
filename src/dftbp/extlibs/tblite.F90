@@ -44,8 +44,10 @@ module dftbp_extlibs_tblite
   use dftbp_type_commontypes, only : TOrbitals
   use dftbp_type_integral, only : TIntegral
 #:if WITH_TBLITE
+  use dftbp_extlibs_tblite_lambda, only : get_fragment, unfold_fragment, guess_bonds
   use mctc_env, only : error_type
   use mctc_io, only : structure_type, new
+  use mctc_io_math, only : matinv_3x3
   use mctc_io_symbols, only : symbol_length
   use tblite_basis_type, only : get_cutoff, basis_type
   use tblite_context_type, only : context_type
@@ -101,6 +103,40 @@ module dftbp_extlibs_tblite
   end type TBLiteInfo
 
 
+  !> Object factory to create parametrized calculator classes
+  type :: TTBLiteSpec
+
+    !> Enumerator
+    integer :: method
+
+    !> Parameter file
+    character(len=:), allocatable :: paramFile
+
+  end type TTBLiteSpec
+
+
+  !> Information for fragments in lambda scaling calculation
+  type :: TTBLiteFragment
+  #:if WITH_TBLITE
+    !> Substructure of the fragments
+    type(structure_type), allocatable :: fmol(:)
+
+    !> Parametrisation data for fragments
+    type(xtb_calculator), allocatable :: fcalc(:)
+
+    !> Wavefunction data for fragments
+    type(wavefunction_type), allocatable :: fwfn(:)
+  #:endif
+
+    !> Fragment indices
+    integer, allocatable :: list(:)
+
+    !> Bond orders
+    real(dp), allocatable :: bonds(:, :)
+
+  end type TTBLiteFragment
+
+
   !> Input for the library
   type :: TTBLiteInput
 
@@ -115,18 +151,25 @@ module dftbp_extlibs_tblite
     !> Parametrization info
     type(TBLiteInfo) :: info
 
+    !> Specification to create calculators
+    type(TTBLiteSpec) :: spec
+
+    !> Scaling of interaction strength
+    real(dp) :: lambda
+
+    !> Electronic temperature
+    real(dp) :: elecTemp
+
   contains
 
     !> Create geometry data for library
     procedure :: setupGeometry
 
-    !> Create parametrization data for library
-    generic :: setupCalculator => setupCalculatorFromEnum, setupCalculatorFromFile
-    procedure :: setupCalculatorFromEnum
-    procedure :: setupCalculatorFromFile
-
     !> Create orbital information from input data
     procedure :: setupOrbitals
+
+    !> Create calculator information
+    procedure :: setupCalculator
 
   end type TTBLiteInput
 
@@ -192,6 +235,15 @@ module dftbp_extlibs_tblite
     !> Electrostatic energy
     real(dp) :: ees
 
+    !> Fragment information
+    type(TTBLiteFragment), allocatable :: fragment
+
+    !> Scaling of interaction strength
+    real(dp) :: lambda
+
+    !> Fragment energy
+    real(dp) :: fenergy
+
     !> Contributions to the gradient
     real(dp), allocatable :: gradient(:, :)
 
@@ -211,6 +263,9 @@ module dftbp_extlibs_tblite
 
     !> Get energy contributions
     procedure :: getEnergies
+
+    !> Get energy contributions in parts
+    procedure :: getEnergyParts
 
     !> Get force contributions
     procedure :: addGradients
@@ -287,51 +342,6 @@ contains
   end subroutine setupGeometry
 
 
-  !> Setup calculator for input data
-  subroutine setupCalculatorFromEnum(this, method)
-
-    !> Input data
-    class(TTBLiteInput), intent(inout) :: this
-
-    !> Selected method
-    integer, intent(in) :: method
-
-  #:if WITH_TBLITE
-    call getCalculator(method, this%mol, this%calc)
-  #:else
-    call notImplementedError
-  #:endif
-  end subroutine setupCalculatorFromEnum
-
-
-  !> Setup calculator for input data
-  subroutine setupCalculatorFromFile(this, method)
-
-    !> Input data
-    class(TTBLiteInput), intent(inout) :: this
-
-    !> Selected method
-    character(len=*), intent(in) :: method
-
-  #:if WITH_TBLITE
-    type(param_record) :: param
-    type(error_type), allocatable :: err
-
-    call param%load(method, err)
-    if (allocated(err)) then
-      call error(err%message)
-    end if
-    call new_xtb_calculator(this%calc, this%mol, param, err)
-    if (allocated(err)) then
-      call error(err%message)
-    end if
-    this%info%name = param%name
-  #:else
-    call notImplementedError
-  #:endif
-  end subroutine setupCalculatorFromFile
-
-
   !> Setup orbital information from input data
   subroutine setupOrbitals(this, species0, orb)
 
@@ -350,6 +360,20 @@ contains
     call notImplementedError
   #:endif
   end subroutine setupOrbitals
+
+
+  !> Setup calculator information from input data
+  subroutine setupCalculator(this)
+
+    !> Input data
+    class(TTBLiteInput), intent(inout) :: this
+
+  #:if WITH_TBLITE
+    call getCalculator(this%spec, this%mol, this%calc)
+  #:else
+    call notImplementedError
+  #:endif
+  end subroutine setupCalculator
 
 
   !> Constructor for the library interface
@@ -378,9 +402,12 @@ contains
 
   #:if WITH_TBLITE
     type(scf_info) :: info
+    character(len=symbol_length), allocatable :: symbol(:)
+    integer :: nfrag, ifr
 
     this%mol = input%mol
     this%calc = input%calc
+    !call getCalculator(input%spec, input%mol, this%calc)
     this%info = input%info
 
     info = this%calc%variable_info()
@@ -395,7 +422,7 @@ contains
     end if
 
     call new_wavefunction(this%wfn, this%mol%nat, this%calc%bas%nsh, this%calc%bas%nao, &
-        & 0.0_dp)
+        & input%elecTemp)
 
     call new_potential(this%pot, this%mol, this%calc%bas)
 
@@ -410,6 +437,12 @@ contains
 
     allocate(this%sp2id(maxval(species0)))
     call getSpeciesIdentifierMap(this%sp2id, species0, this%mol%id)
+
+    this%lambda = input%lambda
+    if (this%lambda /= 1.0_dp) then
+      allocate(this%fragment)
+      call getFragments(this%fragment, input%mol, input%spec, input%elecTemp)
+    end if
   #:else
     call notImplementedError
   #:endif
@@ -417,10 +450,45 @@ contains
 
 
 #:if WITH_TBLITE
-  subroutine getCalculator(method, mol, calc)
+  !> Create information on fragments
+  subroutine getFragments(this, mol, spec, elecTemp)
 
-    !> Selected method
-    integer, intent(in) :: method
+    !> Instance of the fragment information
+    type(TTBLiteFragment), intent(out) :: this
+
+    !> Molecular structure data
+    type(structure_type), intent(in) :: mol
+
+    !> Specification for creating the calculator
+    type(TTBLiteSpec), intent(in) :: spec
+
+    !> Electronic temperature for filling
+    real(dp), intent(in) :: elecTemp
+
+    real(dp), parameter :: accuracy = 1.0_dp, thr = 0.1_dp
+    integer :: nfrag, ifr
+
+    allocate(this%list(mol%nat))
+    allocate(this%bonds(mol%nat, mol%nat))
+
+    call guess_bonds(mol, this%bonds)
+    call get_fragment(this%list, this%bonds, thr)
+
+    nfrag = maxval(this%list)
+    allocate(this%fmol(nfrag), this%fcalc(nfrag), this%fwfn(nfrag))
+    do ifr = 1, nfrag
+      call collectFragment(this%fmol(ifr), mol, this%list == ifr)
+      call getCalculator(spec, this%fmol(ifr), this%fcalc(ifr))
+      call new_wavefunction(this%fwfn(ifr), this%fmol(ifr)%nat, this%fcalc(ifr)%bas%nsh, &
+        & this%fcalc(ifr)%bas%nao, elecTemp)
+    end do
+  end subroutine getFragments
+#:endif
+
+
+#:if WITH_TBLITE
+  !> Setup calculator for input data
+  subroutine getCalculator(spec, mol, calc)
 
     !> Molecular structure data
     type(structure_type), intent(in) :: mol
@@ -428,16 +496,35 @@ contains
     !> Parametrisation data
     type(xtb_calculator), intent(out) :: calc
 
-    select case(method)
-    case default
-      call error("Unknown method selector")
-    case(tbliteMethod%gfn2xtb)
-      call new_gfn2_calculator(calc, mol)
-    case(tbliteMethod%gfn1xtb)
-      call new_gfn1_calculator(calc, mol)
-    case(tbliteMethod%ipea1xtb)
-      call new_ipea1_calculator(calc, mol)
-    end select
+    !> Selected method
+    type(TTBLiteSpec), intent(in) :: spec
+
+    if (allocated(spec%paramFile)) then
+      block
+        type(param_record) :: param
+        type(error_type), allocatable :: err
+
+        call param%load(spec%paramFile, err)
+        if (allocated(err)) then
+          call error(err%message)
+        end if
+        call new_xtb_calculator(calc, mol, param, err)
+        if (allocated(err)) then
+          call error(err%message)
+        end if
+      end block
+    else
+      select case(spec%method)
+      case default
+        call error("Unknown method selector")
+      case(tbliteMethod%gfn2xtb)
+        call new_gfn2_calculator(calc, mol)
+      case(tbliteMethod%gfn1xtb)
+        call new_gfn1_calculator(calc, mol)
+      case(tbliteMethod%ipea1xtb)
+        call new_ipea1_calculator(calc, mol)
+      end select
+    end if
   end subroutine getCalculator
 #:endif
 
@@ -541,6 +628,7 @@ contains
     this%ehal = 0.0_dp
     this%erep = 0.0_dp
     this%edisp = 0.0_dp
+    this%fenergy = 0.0_dp
     this%gradient(:, :) = 0.0_dp
     this%sigma(:, :) = 0.0_dp
 
@@ -575,10 +663,80 @@ contains
 
     call get_selfenergy(this%calc%h0, this%mol%id, this%calc%bas%ish_at, &
         & this%calc%bas%nsh_id, cn=this%cn, selfenergy=this%selfenergy, dsedcn=this%dsedcn)
+
+    this%gradient = this%lambda * this%gradient
+    this%sigma = this%lambda * this%sigma
+
+    if (allocated(this%fragment)) then
+      call updateFragments(this)
+    end if
   #:else
     call notImplementedError
   #:endif
   end subroutine updateCoords
+
+
+#:if WITH_TBLITE
+  subroutine updateFragments(this)
+
+    !> Data structure
+    class(TTBLite), intent(inout) :: this
+
+    integer :: ifr
+    real(dp), parameter :: accuracy = 1.0_dp, thr = 0.1_dp
+    real(dp) :: fenergy, fsigma(3, 3), invlat(3, 3)
+    real(dp), allocatable :: fgradient(:, :), abc(:, :), xyz(:, :)
+    integer :: iat, jat
+
+    xyz = this%mol%xyz
+    if (any(this%mol%periodic)) then
+      invlat = matinv_3x3(this%mol%lattice)
+      abc = matmul(invlat, this%mol%xyz)
+      call unfold_fragment(abc, this%fragment%bonds, thr)
+      this%mol%xyz(:, :) = matmul(this%mol%lattice, abc)
+    end if
+
+    this%fenergy = 0.0_dp
+    do ifr = 1, maxval(this%fragment%list)
+      call collectFragment(this%fragment%fmol(ifr), this%mol, this%fragment%list == ifr)
+
+      allocate(fgradient(3, this%fragment%fmol(ifr)%nat))
+
+      call xtb_singlepoint(this%ctx, this%fragment%fmol(ifr), this%fragment%fcalc(ifr), &
+          & this%fragment%fwfn(ifr), accuracy, fenergy, fgradient, fsigma, verbosity=1)
+
+      this%fenergy = this%fenergy + fenergy
+      this%sigma = this%sigma + (1.0_dp - this%lambda) * fsigma
+      jat = 0
+      do iat = 1, this%mol%nat
+        if (this%fragment%list(iat) /= ifr) cycle
+        jat = jat + 1
+        this%gradient(:, iat) = this%gradient(:, iat) + (1.0_dp-this%lambda)*fgradient(:, jat)
+      end do
+      deallocate(fgradient)
+    end do
+    this%mol%xyz(:, :) = xyz
+  end subroutine updateFragments
+
+
+  subroutine collectFragment(frag, mol, mask)
+    !> Molecular structure data of the fragment
+    type(structure_type), intent(out) :: frag
+    !> Molecular structure data of the full system
+    type(structure_type), intent(in) :: mol
+    !> Atom resolved mask for this fragment
+    logical, intent(in) :: mask(:)
+
+    integer :: nat
+    integer, allocatable :: num(:)
+    real(dp), allocatable :: xyz(:, :)
+
+    nat = count(mask)
+    num = pack(mol%num(mol%id), mask)
+    xyz = reshape(pack(mol%xyz, spread(mask, 1, 3)), [3, nat])
+    call new(frag, num, xyz)
+  end subroutine collectFragment
+#:endif
 
 
   !> Update internal copy of lattice vectors
@@ -608,11 +766,38 @@ contains
     real(dp), intent(out) :: energies(:)
 
   #:if WITH_TBLITE
-    energies(:) = (this%ehal + this%erep + this%edisp + this%escd + this%ees) / size(energies)
+    energies(:) = (this%ehal + this%erep + this%edisp + this%escd + this%ees) &
+        & / size(energies)
   #:else
     call notImplementedError
   #:endif
   end subroutine getEnergies
+
+
+  !> Get energy contributions in parts
+  subroutine getEnergyParts(this, ecls, escc, efrg)
+
+    !> Data structure
+    class(TTBLite), intent(in) :: this
+
+    !> Classical contributions from this container
+    real(dp), intent(out) :: ecls
+
+    !> Classical contributions from this container
+    real(dp), intent(out) :: escc
+
+    !> Classical contributions from this container
+    real(dp), intent(out) :: efrg
+
+  #:if WITH_TBLITE
+    ecls = this%ehal + this%erep + this%edisp
+    escc = this%escd + this%ees
+    efrg = this%fenergy
+  #:else
+    call notImplementedError
+  #:endif
+  end subroutine getEnergyParts
+
 
 
   !> Get force contributions
@@ -1508,21 +1693,21 @@ contains
     integer :: nAtom, iAtFirst, iAtLast
     real(dp), allocatable :: gradient(:, :), sigma(:, :), dEdcn(:)
 
-    if (allocated(this%calc%coulomb)) then
-      call this%calc%coulomb%get_gradient(this%mol, this%cache, this%wfn, this%gradient, &
-          & this%sigma)
-    end if
-
-    if (allocated(this%calc%dispersion)) then
-      call this%calc%dispersion%get_gradient(this%mol, this%dcache, this%wfn, this%gradient, &
-          & this%sigma)
-    end if
-
     nAtom = size(nNeighbour)
     allocate(gradient(3, nAtom), sigma(3, 3), dEdcn(nAtom))
     gradient(:, :) = 0.0_dp
     sigma(:, :) = 0.0_dp
     dEdcn(:) = 0.0_dp
+
+    if (allocated(this%calc%coulomb)) then
+      call this%calc%coulomb%get_gradient(this%mol, this%cache, this%wfn, gradient, &
+          & sigma)
+    end if
+
+    if (allocated(this%calc%dispersion)) then
+      call this%calc%dispersion%get_gradient(this%mol, this%dcache, this%wfn, gradient, &
+          & sigma)
+    end if
 
     call distributeRangeInChunks(env, 1, nAtom, iAtFirst, iAtLast)
 
@@ -1540,8 +1725,8 @@ contains
     call gemv(gradient, this%dcndr, dEdcn, beta=1.0_dp)
     call gemv(sigma, this%dcndL, dEdcn, beta=1.0_dp)
 
-    this%gradient(:, :) = this%gradient + gradient
-    this%sigma(:, :) = this%sigma + sigma
+    this%gradient(:, :) = this%gradient + this%lambda * gradient
+    this%sigma(:, :) = this%sigma + this%lambda * sigma
   #:else
     call notImplementedError
   #:endif
