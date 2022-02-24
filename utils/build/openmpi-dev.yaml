@@ -1,0 +1,13 @@
+name: devel
+channels:
+  - conda-forge
+dependencies:
+  - cmake
+  - ninja
+  - fypp
+  - pkg-config
+  - liblapack
+  - libblas
+  - openmpi
+  - scalapack
+  - numpy
