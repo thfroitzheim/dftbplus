@@ -1537,11 +1537,7 @@ contains
 
     ! Spin calculation
     if (ctrl%reksInp%reksAlg == reksTypes%noReks  .and. .not.ctrl%isNonAufbau) then
-    #:if WITH_TRANSPORT
-      call readSpinPolarisation(node, ctrl, geo, tp)
-    #:else
       call readSpinPolarisation(node, ctrl, geo)
-    #:endif
     end if
 
     ! temporararily removed until debugged
@@ -1921,11 +1917,7 @@ contains
 
     ! Spin calculation
     if (ctrl%reksInp%reksAlg == reksTypes%noReks .and. .not.ctrl%isNonAufbau) then
-    #:if WITH_TRANSPORT
-      call readSpinPolarisation(node, ctrl, geo, tp)
-    #:else
       call readSpinPolarisation(node, ctrl, geo)
-    #:endif
     end if
 
     ! temporararily removed until debugged
@@ -2216,11 +2208,7 @@ contains
 
 
   !> Spin calculation
-#:if WITH_TRANSPORT
-  subroutine readSpinPolarisation(node, ctrl, geo, tp)
-#:else
   subroutine readSpinPolarisation(node, ctrl, geo)
-#:endif
 
     !> Relevant node in input tree
     type(fnode), pointer :: node
@@ -2230,11 +2218,6 @@ contains
 
     !> Geometry structure to be filled
     type(TGeometry), intent(in) :: geo
-
-  #:if WITH_TRANSPORT
-    !> Transport parameters
-    type(TTransPar), intent(inout)  :: tp
-  #:endif
 
     type(fnode), pointer :: value1, child
     type(string) :: buffer
