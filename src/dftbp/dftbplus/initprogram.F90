@@ -5245,7 +5245,7 @@ contains
       call error("Range separated calculations not currently implemented for XLBOMD")
     end if
 
-    if (this%t3rd) then
+    if (this%t3rd .and. .not.allocated(this%tblite)) then
       call error("Range separated calculations not currently implemented for 3rd order DFTB")
     end if
 
