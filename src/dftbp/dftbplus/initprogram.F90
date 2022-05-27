@@ -1650,7 +1650,7 @@ contains
       ! Longest cut-off including the softening part of gamma
       this%cutOff%mCutOff = max(this%cutOff%mCutOff, this%scc%getCutOff())
 
-      if (input%ctrl%t3rd .and. input%ctrl%tShellResolved) then
+      if (input%ctrl%t3rd .and. input%ctrl%tShellResolved .and. .not.allocated(this%tblite)) then
         call error("Onsite third order DFTB only compatible with shell non-resolved SCC")
       end if
 
@@ -4113,12 +4113,12 @@ contains
 
     call OrbitalEquiv_reduce(this%qInput, this%iEqOrbitals, this%orb, this%qInpRed(1:this%nIneqOrb))
 
-    if (allocated(this%multipoleInp%dipoleAtom)) then
+    if (allocated(this%multipoleInp%dipoleAtom) .and. .not.allocated(this%tblite)) then
       ! FIXME: Assumes we always mix all dipole moments
       this%qInpRed(this%nIneqOrb+1:this%nIneqOrb+this%nIneqDip) =&
           & reshape(this%multipoleInp%dipoleAtom, [this%nIneqDip])
     end if
-    if (allocated(this%multipoleInp%quadrupoleAtom)) then
+    if (allocated(this%multipoleInp%quadrupoleAtom) .and. .not.allocated(this%tblite)) then
       ! FIXME: Assumes we always mix all quadrupole moments
       this%qInpRed(this%nIneqOrb+this%nIneqDip+1:this%nIneqOrb+this%nIneqDip+this%nIneqQuad) =&
           & reshape(this%multipoleInp%quadrupoleAtom, [this%nIneqQuad])
@@ -5242,7 +5242,7 @@ contains
       call error("Restart on thresholded range separation not working correctly")
     end if
 
-    if (tShellResolved) then
+    if (tShellResolved .and. .not.allocated(this%tblite)) then
       call error("Range separated functionality currently does not yet support shell-resolved scc")
     end if
 
