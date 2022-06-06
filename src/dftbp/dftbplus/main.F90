@@ -5678,7 +5678,8 @@ contains
         call error("Range separated forces do not support non-colinear spin")
       else
         call rangeSep%addLRGradients(derivs, nonSccDeriv, deltaRhoOutSqr, skOverCont, coord,&
-            & species, orb, denseDesc%iAtomStart, SSqrReal, neighbourList%iNeighbour, nNeighbourSK)
+            & species, orb, denseDesc%iAtomStart, SSqrReal, neighbourList%iNeighbour, nNeighbourSK,&
+            & tblite, img2CentCell, iSparseStart)
       end if
     end if
 

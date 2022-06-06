@@ -20,6 +20,7 @@ module dftbp_dftb_rangeseparated
   use dftbp_math_blasroutines, only : gemm
   use dftbp_math_sorting, only : index_heap_sort
   use dftbp_type_commontypes, only : TOrbitals
+  use dftbp_extlibs_tblite, only : TTBLite
   implicit none
 
   private
@@ -1320,7 +1321,7 @@ contains
 
   !> Adds gradients due to long-range HF-contribution
   subroutine addLrGradients(this, gradients, derivator, deltaRho, skOverCont, coords, species, orb,&
-      & iSquare, ovrlapMat, iNeighbour, nNeighbourSK)
+      & iSquare, ovrlapMat, iNeighbour, nNeighbourSK, tblite, img2CentCell, iPair)
 
     !> class instance
     class(TRangeSepFunc), intent(inout) :: this
@@ -1355,6 +1356,15 @@ contains
     !> number of atoms neighbouring each site where the overlap is non-zero
     integer, intent(in) :: nNeighbourSK(:)
 
+    !> map from image atoms to the original unique atom
+    integer, optional, intent(in) :: img2CentCell(:)
+
+    !> Shift vector, where the interaction between two atoms
+    integer, optional, intent(in) :: iPair(0:,:)
+
+    !> Library interface handler
+    type(TTBLite), optional, allocatable, intent(inout) :: tblite
+ 
     !> differentiation object
     class(TNonSccDiff), intent(in) :: derivator
 
@@ -1364,11 +1374,22 @@ contains
     integer :: nSpin, iSpin, mu, alpha, beta, ccc, kkk
     real(dp) :: sPrimeTmp(orb%mOrb,orb%mOrb,3)
     real(dp) :: sPrimeTmp2(orb%mOrb,orb%mOrb,3)
+!    real(dp), allocatable :: stmp(:)
+!    real(dp), allocatable :: dstmp(:,:)
+    
     real(dp), allocatable :: gammaPrimeTmp(:,:,:), tmpOvr(:,:), tmpRho(:,:,:), tmpderiv(:,:)
-
     nSpin = size(deltaRho,dim=3)
     call allocateAndInit(tmpOvr, tmpRho, gammaPrimeTmp, tmpderiv)
     nAtom = size(this%species)
+    
+!    ! Get overlap derivatives for tblite
+!    if ( allocated(tblite) .eqv. .true. ) then
+!      allocate(stmp(tblite%msao(tblite%bas%maxl)**2), dstmp(3, tblite%msao(tblite%bas%maxl)**2))
+!
+!      !call tblite%buildSprime(1, nAtom, species, coords, nNeighbourSK, iNeighbour, &
+!      !& iPair, nOrbAtom, tblite%bas, stmp, dstmp)
+!    end if
+
     tmpderiv = 0.0_dp
     ! sum K
     loopK: do iAtK = 1, nAtom
@@ -1378,9 +1399,16 @@ contains
         ! evaluate the ovr_prime
         sPrimeTmp2 = 0.0_dp
         sPrimeTmp = 0.0_dp
-        if ( iAtK /= iAtC ) then
+        if ( iAtK /= iAtC .and. allocated(tblite) .eqv. .false. ) then
           call derivator%getFirstDeriv(sPrimeTmp, skOverCont, coords, species, iAtK, iAtC, orb)
           call derivator%getFirstDeriv(sPrimeTmp2, skOverCont, coords, species, iAtC, iAtK, orb)
+          write(*,*) "Here sPrimeTmp", sPrimeTmp
+          write(*,*)  "Here sPrimeTmp2", sPrimeTmp2
+        else if ( iAtK /= iAtC .and. allocated(tblite) .eqv. .true. ) then
+          call tblite%buildSprime(iAtK, iAtK+1, species, coords, nNeighbourSK, iNeighbour, img2CentCell, &
+          & iPair, orb%nOrbAtom, tblite%calc%bas, sPrimeTmp)
+          call tblite%buildSprime(iAtC, iAtC+1, species, coords, nNeighbourSK, iNeighbour, img2CentCell, &
+          & iPair, orb%nOrbAtom, tblite%calc%bas, sPrimeTmp2)
         end if
         loopB: do iAtB = 1, nAtom
           ! A > B
@@ -1411,7 +1439,7 @@ contains
                 tmpforce2 = tmpforce2 + tmpmultvar1 * tmpOvr(kpa,mu)
               end do
             end do
-
+            write(*,*) gammaPrimeTMP
             ! C /= K
             if( iAtK /= iAtC ) then
               if( iAtB /= iAtA) then
