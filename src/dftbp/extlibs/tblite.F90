@@ -44,6 +44,7 @@ module dftbp_extlibs_tblite
   use tblite_container, only : container_cache
   use tblite_cutoff, only : get_lattice_points
   use tblite_integral_multipole, only : multipole_cgto, multipole_grad_cgto, maxl, msao
+  use tblite_integral_overlap, only : overlap_grad_cgto
   use tblite_param, only : param_record
   use tblite_scf_info, only : scf_info, atom_resolved, shell_resolved, orbital_resolved, &
       & not_used
@@ -241,6 +242,9 @@ module dftbp_extlibs_tblite
 
     !> Calculates nonadiabatic matrix: overlap gradient (Sprime) times velocities (Rdot)
     procedure :: buildRdotSprime
+
+    !> Calculates matrix: overlap gradient (Sprime)
+    procedure :: buildSprime
 
   end type TTBLite
 
@@ -1880,6 +1884,109 @@ contains
 
     call error("Forces currently not available in Ehrenfest dynamic with this Hamiltonian")
   end subroutine buildRdotSprime
+
+
+  !> Calculates matrix: overlap gradient (Sprime) 
+  subroutine buildSprime(this, iAtFirst, iAtLast, species, coords, nNeighbour, iNeighbours, & 
+    & img2CentCell, iPair, nOrbAtom, bas, doverlap)
+
+    !> Data structure
+    class(TTBLite), intent(inout) :: this
+
+    !> Atom range for this processor to evaluate
+    integer, intent(in) :: iAtFirst, iAtLast
+
+    !> Chemical species of each atom
+    integer, intent(in) :: species(:)
+
+    !> Atomic coordinates
+    real(dp), intent(in) :: coords(:,:)
+
+    !> Number of surrounding neighbours for each atom
+    integer, intent(in) :: nNeighbour(:)
+
+    !> List of surrounding neighbours for each atom
+    integer, intent(in) :: iNeighbours(0:,:)
+
+    !> Mapping of images back to atoms in the central cell
+    integer, intent(in) :: img2centCell(:)
+
+    !> Shift vector, where the interaction between two atoms starts in the sparse format.
+    integer, intent(in) :: iPair(0:,:)
+
+    !> Size of the block in spare format for each atom
+    integer, intent(in) :: nOrbAtom(:)
+
+    !> Basis set information
+    type(basis_type), intent(in) :: bas
+
+    !> Overlap
+    !real(dp), intent(inout) :: overlap(:)
+
+    !> Overlap derivative
+    real(dp), intent(inout) :: doverlap(:, :, :)
+
+    integer :: iat, jat, izp, jzp, io, jo, nblk, iNeigh, img, ind, li, lj
+    integer :: ish, jsh, is, js, ii, jj, iao, ij, jao, nao, iblk
+    real(dp) :: r2, vec(3)
+    real(dp), allocatable :: stmp(:)
+    real(dp), allocatable :: dstmp(:, :)
+
+    allocate(stmp(msao(bas%maxl)**2), dstmp(3, msao(bas%maxl)**2))
+
+  !  !$omp parallel do schedule(runtime) default(none) reduction(+:dEdcn, gradient, sigma) &
+  !  !$omp shared(iAtFirst, iAtLast, species, bas, h0, selfenergy, dsedcn, coords, &
+  !  !$omp& nNeighbour, iNeighbours, img2centCell, iPair, nOrbAtom, pmat, xmat, shift, &
+  !  !$omp& dipShift, quadShift, nSpin) &
+  !  !$omp private(iat, jat, izp, jzp, is, js, ish, jsh, ii, jj, iao, jao, nao, ij, ind, &
+  !  !$omp& iNeigh, io, jo, nblk, img, r2, vec, stmp, dtmp, qtmp, dstmp, ddtmpi, ddtmpj, &
+  !  !$omp& dqtmpi, dqtmpj, hij, shpoly, dshpoly, dG, dcni, dcnj, dhdcni, dhdcnj, hpij,  &
+  !  !$omp& sval, hscale, pij, iSpin, iblk, li, lj)
+
+    do iat = iAtFirst, iAtLast
+      izp = species(iat)
+      is = bas%ish_at(iat)
+      io = bas%iao_sh(is+1)
+
+      do iNeigh = 1, nNeighbour(iAt)
+        img = iNeighbours(iNeigh, iAt)
+        jAt = img2centCell(img)
+        jZp = species(jAt)
+        js = bas%ish_at(jAt)
+        ind = iPair(iNeigh, iAt)
+        jo = bas%iao_sh(js+1)
+        nBlk = nOrbAtom(iAt)
+
+        vec(:) = coords(:, iAt) - coords(:, img)
+        r2 = vec(1)**2 + vec(2)**2 + vec(3)**2
+
+        do ish = 1, bas%nsh_id(izp)
+          ii = bas%iao_sh(is+iSh) - io
+          do jsh = 1, bas%nsh_id(jzp)
+            jj = bas%iao_sh(js+jSh) - jo
+
+            call overlap_grad_cgto(bas%cgto(jsh, jzp), bas%cgto(ish, izp), &
+                & r2, vec, bas%intcut, stmp, dstmp)
+
+            li = bas%cgto(iSh, iZp)%ang
+            lj = bas%cgto(jSh, jZp)%ang
+            nao = msao(lj)
+            do iao = 1, msao(li)
+              do jao = 1, nao
+                iblk = ind + jj+jao + nBlk*(ii+iao-1)
+                ij = jao + nao*(iao-1)
+              
+                !overlap(iblk) = stmp(ij)
+                doverlap(:,iblk,iblk) = dstmp(:,ij)
+
+              end do
+            end do
+          end do 
+        end do
+
+      end do
+    end do
+    end subroutine buildSprime
 
 
 #:if not WITH_TBLITE
